@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_16.app
+
+      - name: Build (Debug)
+        run: |
+          xcodebuild build \
+            -project KVStudio.xcodeproj \
+            -scheme KVStudio \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Unit tests
+        run: |
+          xcodebuild test \
+            -project KVStudio.xcodeproj \
+            -scheme KVStudio \
+            -configuration Debug \
+            -only-testing:KVStudioTests \
+            CODE_SIGNING_ALLOWED=NO

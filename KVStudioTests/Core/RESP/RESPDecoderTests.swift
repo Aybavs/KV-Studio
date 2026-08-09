@@ -19,8 +19,7 @@ struct RESPDecoderTests {
         return Data(bytes)
     }
 
-    /// Feeds `frame` to a fresh decoder one byte at a time, asserting that every byte
-    /// except the last yields `nil` (incomplete), and returning whatever the final byte yields.
+    /// Feeds `frame` one byte at a time, asserting every byte but the last yields `nil`.
     private func decodeByteAtATime(
         _ frame: Data,
         sourceLocation: SourceLocation = #_sourceLocation
@@ -126,8 +125,7 @@ struct RESPDecoderTests {
     }
 
     @Test func decodesBulkStringWhoseLengthIsHonouredOverEmbeddedCRLF() throws {
-        // The payload's own CRLF must not be mistaken for the frame terminator:
-        // "a\r\nb" is 4 bytes, and the reply that follows must still decode.
+        // The payload's own CRLF must not be mistaken for the frame terminator.
         var buffer = bulkFrame(Array("a\r\nb".utf8))
         buffer.append(wire("+OK\r\n"))
 
@@ -440,8 +438,7 @@ struct RESPDecoderTests {
     }
 
     @Test func doesNotThrowOnGarbageThatIsStillIncomplete() throws {
-        // "$abc" without a terminator is not yet provably malformed: more bytes are needed
-        // to even find the end of the line. Only a complete bad line is an error.
+        // Not yet provably malformed: the line has no end yet.
         var decoder = RESPDecoder()
         decoder.append(wire("$abc"))
         #expect(try decoder.nextValue() == nil)
@@ -453,8 +450,7 @@ struct RESPDecoderTests {
     // MARK: - Nesting depth limit
 
     @Test func throwsOnNestingDeeperThanMaximum() {
-        // 65 nested `*1\r\n` headers push the 65th element one level past the 64-deep cap.
-        // No terminal value is needed: the depth check fires before more bytes are required.
+        // The depth check fires before more bytes are required, so no terminal value is needed.
         var decoder = RESPDecoder()
         decoder.append(wire(String(repeating: "*1\r\n", count: 65)))
         #expect(throws: RESPError.nestingTooDeep) { try decoder.nextValue() }
@@ -482,8 +478,7 @@ struct RESPDecoderTests {
     }
 
     @Test func acceptsBulkLengthAtMaximumAndWaitsForBody() throws {
-        // Exactly 512 MB is a legal declared length; the decoder must accept the header
-        // and wait for the body rather than throwing. Deliberately not allocating the body.
+        // Legal length: accept the header and wait, without allocating the body.
         var decoder = RESPDecoder()
         decoder.append(wire("$536870912\r\n"))
         #expect(try decoder.nextValue() == nil)
@@ -541,11 +536,8 @@ struct RESPDecoderTests {
     }
 
     @Test func compactsBufferMidStreamWithoutCorruptingTrailingPartialReply() throws {
-        // 20,000 four-byte replies (80,000 bytes) push `consumed` past the 64 KB
-        // compaction threshold partway through draining, while a trailing partial bulk
-        // string sits, unconsumed, right after them. This forces `compactIfNeeded()` to
-        // take the mid-stream `buffer.removeFirst(consumed)` branch with live bytes -
-        // both undrained full replies and the partial - still ahead of the cursor.
+        // Pushes `consumed` past the 64 KB threshold with live bytes still ahead of the
+        // cursor, forcing the mid-stream `buffer.removeFirst(consumed)` branch.
         var decoder = RESPDecoder()
         let replyCount = 20_000
         decoder.append(wire(String(repeating: ":1\r\n", count: replyCount)))
@@ -554,8 +546,7 @@ struct RESPDecoderTests {
         for _ in 0..<replyCount {
             #expect(try decoder.nextValue() == .integer(1))
         }
-        // The partial reply is still incomplete, even though a compaction must have
-        // moved the live remainder underneath the cursor by this point.
+        // Still incomplete, though a compaction has moved the live remainder by now.
         #expect(try decoder.nextValue() == nil)
 
         decoder.append(wire("lo\r\n"))

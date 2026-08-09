@@ -1,19 +1,12 @@
 import Foundation
 
-/// A parsed `MAJOR.MINOR.PATCH` version, with an optional leading `v` and an
-/// optional `-prerelease` suffix.
-///
-/// This app only needs to compare go-kv-store server version strings, so parsing
-/// is intentionally strict: exactly three numeric components, no build metadata.
+/// `MAJOR.MINOR.PATCH`, optional leading `v` and `-prerelease` suffix. No build metadata.
 struct SemanticVersion: Equatable, Comparable, Sendable {
     let major: Int
     let minor: Int
     let patch: Int
     let prerelease: String?
 
-    /// Parses a version string such as `1.1.0`, `v1.1.0`, or `1.2.3-beta`.
-    /// Returns `nil` for anything that isn't exactly three non-negative integer
-    /// components (with an optional leading `v` and optional prerelease suffix).
     init?(string: String) {
         var remainder = Substring(string)
 
@@ -60,8 +53,7 @@ struct SemanticVersion: Equatable, Comparable, Sendable {
         if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
         if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
 
-        // Same core version: a prerelease always orders below the plain release,
-        // per SemVer. We don't need finer-grained prerelease precedence than that.
+        // A prerelease orders below the plain release; finer precedence is not needed.
         switch (lhs.prerelease, rhs.prerelease) {
         case (nil, nil):
             return false

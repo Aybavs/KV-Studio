@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Stands in for the connection screen until Task 15 builds the real one.
-/// It exists so the app has a launchable root while the protocol layer is built.
+/// Temporary root until the real connection screen exists.
 struct ConnectionPlaceholderView: View {
     var body: some View {
         VStack(spacing: 12) {

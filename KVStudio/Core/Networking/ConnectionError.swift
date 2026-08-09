@@ -1,6 +1,6 @@
 import Foundation
 
-/// A transport-level failure. A `-ERR` reply from the server is a `RESPValue`, not one of these.
+// Transport failures only; a `-ERR` reply is a RESPValue.
 enum ConnectionError: Error, Equatable, Sendable {
     case notConnected
     case invalidPort(UInt16)

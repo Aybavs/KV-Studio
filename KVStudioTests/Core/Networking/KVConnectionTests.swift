@@ -18,15 +18,20 @@ private final class FakePeer: @unchecked Sendable {
         self.descriptor = descriptor
     }
 
+    // A dropped tail would hang the client until the suite time limit; closing fails it now.
     func write(_ data: Data) {
         data.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }
             var offset = 0
             while offset < raw.count {
                 let written = Darwin.write(descriptor, base.advanced(by: offset), raw.count - offset)
-                if written < 0 && errno == EINTR { continue }
-                guard written > 0 else { return }
-                offset += written
+                if written > 0 {
+                    offset += written
+                    continue
+                }
+                if written < 0 && (errno == EINTR || errno == EAGAIN) { continue }
+                close()
+                return
             }
         }
     }
@@ -107,8 +112,7 @@ private final class FakePeer: @unchecked Sendable {
 
 private final class FakeServer: @unchecked Sendable {
     let port: UInt16
-    private let listener: Int32
-    private let queue: DispatchQueue
+    private let acceptSource: DispatchSourceRead
 
     init(label: String = #function, handler: @escaping @Sendable (FakePeer) -> Void) throws {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
@@ -145,23 +149,33 @@ private final class FakeServer: @unchecked Sendable {
             throw FakeServerError.setupFailed
         }
 
-        listener = descriptor
         port = UInt16(bigEndian: assigned.sin_port)
-        queue = DispatchQueue(label: "fake-server.\(label)")
 
-        queue.async {
+        // A readable-source accept never blocks a thread, so `stop()` is deterministic.
+        let work = DispatchQueue(label: "fake-server.work.\(label)")
+        let source = DispatchSource.makeReadSource(
+            fileDescriptor: descriptor,
+            queue: DispatchQueue(label: "fake-server.accept.\(label)")
+        )
+        acceptSource = source
+        source.setEventHandler {
             let accepted = accept(descriptor, nil, nil)
+            source.cancel()
             guard accepted >= 0 else { return }
             var noDelay: Int32 = 1
             setsockopt(accepted, Int32(IPPROTO_TCP), TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
             let peer = FakePeer(descriptor: accepted)
-            handler(peer)
-            peer.finish()
+            work.async {
+                handler(peer)
+                peer.finish()
+            }
         }
+        source.setCancelHandler { Darwin.close(descriptor) }
+        source.resume()
     }
 
     func stop() {
-        Darwin.close(listener)
+        acceptSource.cancel()
     }
 }
 
@@ -202,10 +216,6 @@ private final class Signal: @unchecked Sendable {
 
     private func bytes(_ text: String) -> Data {
         Data(text.utf8)
-    }
-
-    private func bulkFrame(_ payload: Data) -> Data {
-        Data("$\(payload.count)\r\n".utf8) + payload + Data("\r\n".utf8)
     }
 
     private func connect(to server: FakeServer) async throws -> KVConnection {
@@ -386,5 +396,142 @@ private final class Signal: @unchecked Sendable {
             try await connection.connect(to: ConnectionEndpoint(host: "127.0.0.1", port: 1))
         }
         #expect(await connection.isConnected == false)
+    }
+
+    @Test func portZeroIsRejectedBeforeDialling() async throws {
+        let connection = KVConnection()
+        await #expect(throws: ConnectionError.invalidPort(0)) {
+            try await connection.connect(to: ConnectionEndpoint(host: "127.0.0.1", port: 0))
+        }
+        #expect(await connection.isConnected == false)
+    }
+
+    @Test func disconnectClearsConnectedStateAndFailsLaterSends() async throws {
+        let server = try FakeServer { peer in
+            _ = peer.readCommand()
+        }
+        defer { server.stop() }
+
+        let connection = try await connect(to: server)
+        #expect(await connection.isConnected)
+
+        await connection.disconnect()
+        #expect(await connection.isConnected == false)
+        await #expect(throws: ConnectionError.notConnected) {
+            _ = try await connection.send([self.bytes("PING")])
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func disconnectWhileDiallingLeavesTheActorUsable() async throws {
+        let connection = KVConnection()
+
+        for _ in 0..<20 {
+            let server = try FakeServer { peer in
+                _ = peer.readCommand()
+            }
+            let endpoint = ConnectionEndpoint(host: "127.0.0.1", port: server.port)
+            let dialling = Task { try await connection.connect(to: endpoint) }
+            await Task.yield()
+            await connection.disconnect()
+            // Deadlocks here before the fix: the pending readiness continuation is dropped.
+            _ = try? await dialling.value
+            server.stop()
+        }
+
+        let healthy = try FakeServer { peer in
+            _ = peer.readCommand()
+            peer.write(Data("+PONG\r\n".utf8))
+        }
+        defer { healthy.stop() }
+
+        try await connection.connect(to: ConnectionEndpoint(host: "127.0.0.1", port: healthy.port))
+        let value = try await connection.send([bytes("PING")])
+        #expect(value == .simpleString(bytes("PONG")))
+        await connection.disconnect()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func disconnectInterruptsAnInFlightSendAndTheActorReconnects() async throws {
+        let commandRead = Signal()
+        let silentServer = try FakeServer { peer in
+            _ = peer.readCommand()
+            commandRead.fire()
+            while peer.readCommand() != nil {}
+        }
+        defer { silentServer.stop() }
+
+        let connection = try await connect(to: silentServer)
+        let stalled = Task { try await connection.send([self.bytes("GET"), self.bytes("key")]) }
+
+        await commandRead.wait()
+        await connection.disconnect()
+
+        await #expect(throws: ConnectionError.self) {
+            _ = try await stalled.value
+        }
+        #expect(await connection.isConnected == false)
+
+        let healthy = try FakeServer { peer in
+            _ = peer.readCommand()
+            peer.write(Data("+PONG\r\n".utf8))
+        }
+        defer { healthy.stop() }
+
+        try await connection.connect(to: ConnectionEndpoint(host: "127.0.0.1", port: healthy.port))
+        let value = try await connection.send([bytes("PING")])
+        #expect(value == .simpleString(bytes("PONG")))
+        await connection.disconnect()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingAParkedCallerFailsFastAndKeepsTheQueueIntact() async throws {
+        let commandRead = Signal()
+        let releaseReply = DispatchSemaphore(value: 0)
+        let server = try FakeServer { peer in
+            guard let first = peer.readCommand(), first.count == 2 else { return }
+            commandRead.fire()
+            releaseReply.wait()
+            peer.write(Data("$\(first[1].count)\r\n".utf8) + first[1] + Data("\r\n".utf8))
+            while let next = peer.readCommand(), next.count == 2 {
+                peer.write(Data("$\(next[1].count)\r\n".utf8) + next[1] + Data("\r\n".utf8))
+            }
+        }
+        defer {
+            releaseReply.signal()
+            server.stop()
+        }
+
+        let connection = try await connect(to: server)
+        let holder = Task { try await connection.send([self.bytes("ECHO"), self.bytes("held")]) }
+        await commandRead.wait()
+
+        let parkedEntered = Signal()
+        let parked = Task { () -> RESPValue in
+            parkedEntered.fire()
+            return try await connection.send([self.bytes("ECHO"), self.bytes("parked")])
+        }
+        await parkedEntered.wait()
+        await Task.yield()
+
+        let followerEntered = Signal()
+        let follower = Task { () -> RESPValue in
+            followerEntered.fire()
+            return try await connection.send([self.bytes("ECHO"), self.bytes("follower")])
+        }
+        await followerEntered.wait()
+        await Task.yield()
+
+        parked.cancel()
+        // Hangs until the holder finishes before the fix; the holder is still stalled here.
+        await #expect(throws: CancellationError.self) {
+            _ = try await parked.value
+        }
+
+        releaseReply.signal()
+        #expect(try await holder.value == .bulkString(bytes("held")))
+        #expect(try await follower.value == .bulkString(bytes("follower")))
+        #expect(await connection.isConnected)
+        await connection.disconnect()
     }
 }

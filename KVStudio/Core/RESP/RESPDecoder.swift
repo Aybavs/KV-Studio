@@ -214,6 +214,9 @@ struct RESPDecoder {
     ///
     /// Digits accumulate negatively so that `Int64.min` — whose magnitude does not fit in
     /// `Int64` — parses without overflowing.
+    ///
+    /// A leading `+` is accepted leniently alongside `-`, even though the protocol only
+    /// ever specifies unsigned or `-`-prefixed integers.
     private func parseInteger(_ line: ArraySlice<UInt8>) throws -> Int64 {
         var index = line.startIndex
         guard index < line.endIndex else { throw RESPError.invalidInteger }

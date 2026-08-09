@@ -96,6 +96,11 @@ struct RESPDecoderTests {
         #expect(try decodeWhole(wire(":-9223372036854775808\r\n")) == .integer(Int64.min))
     }
 
+    @Test func decodesIntegerWithLeadingPlusSign() throws {
+        // A leading '+' is accepted leniently; see the doc comment on parseInteger.
+        #expect(try decodeWhole(wire(":+5\r\n")) == .integer(5))
+    }
+
     // MARK: - Bulk string
 
     @Test func decodesBulkString() throws {
@@ -359,79 +364,79 @@ struct RESPDecoderTests {
     @Test func throwsOnUnknownTypeByte() {
         var decoder = RESPDecoder()
         decoder.append(wire("%2\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.unknownTypeByte(UInt8(ascii: "%"))) { try decoder.nextValue() }
     }
 
     @Test func throwsOnUnknownTypeByteInsideArray() {
         var decoder = RESPDecoder()
         decoder.append(wire("*1\r\n#t\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.unknownTypeByte(UInt8(ascii: "#"))) { try decoder.nextValue() }
     }
 
     @Test func throwsOnNonNumericBulkLength() {
         var decoder = RESPDecoder()
         decoder.append(wire("$abc\r\nhello\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidInteger) { try decoder.nextValue() }
     }
 
     @Test func throwsOnEmptyBulkLength() {
         var decoder = RESPDecoder()
         decoder.append(wire("$\r\n\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidInteger) { try decoder.nextValue() }
     }
 
     @Test func throwsOnNegativeBulkLengthOtherThanMinusOne() {
         var decoder = RESPDecoder()
         decoder.append(wire("$-2\r\nab\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidLength) { try decoder.nextValue() }
     }
 
     @Test func throwsOnNonNumericArrayLength() {
         var decoder = RESPDecoder()
         decoder.append(wire("*x\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidInteger) { try decoder.nextValue() }
     }
 
     @Test func throwsOnNegativeArrayLengthOtherThanMinusOne() {
         var decoder = RESPDecoder()
         decoder.append(wire("*-3\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidLength) { try decoder.nextValue() }
     }
 
     @Test func throwsOnNonNumericInteger() {
         var decoder = RESPDecoder()
         decoder.append(wire(":12x\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidInteger) { try decoder.nextValue() }
     }
 
     @Test func throwsOnIntegerOutOfInt64Range() {
         var decoder = RESPDecoder()
         decoder.append(wire(":9223372036854775808\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidInteger) { try decoder.nextValue() }
     }
 
     @Test func throwsWhenBulkBodyIsNotFollowedByCRLF() {
         var decoder = RESPDecoder()
         decoder.append(wire("$5\r\nhelloXX"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidTerminator) { try decoder.nextValue() }
     }
 
     @Test func throwsWhenBulkBodyIsFollowedByLoneLF() {
         var decoder = RESPDecoder()
         decoder.append(wire("$5\r\nhello\n\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidTerminator) { try decoder.nextValue() }
     }
 
     @Test func throwsOnBareCarriageReturnInsideLine() {
         var decoder = RESPDecoder()
         decoder.append(wire("+O\rK\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidTerminator) { try decoder.nextValue() }
     }
 
     @Test func throwsOnBareLineFeedTerminator() {
         var decoder = RESPDecoder()
         decoder.append(wire("+OK\nmore"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidTerminator) { try decoder.nextValue() }
     }
 
     @Test func doesNotThrowOnGarbageThatIsStillIncomplete() throws {
@@ -442,7 +447,46 @@ struct RESPDecoderTests {
         #expect(try decoder.nextValue() == nil)
 
         decoder.append(wire("\r\n"))
-        #expect(throws: RESPError.self) { try decoder.nextValue() }
+        #expect(throws: RESPError.invalidInteger) { try decoder.nextValue() }
+    }
+
+    // MARK: - Nesting depth limit
+
+    @Test func throwsOnNestingDeeperThanMaximum() {
+        // 65 nested `*1\r\n` headers push the 65th element one level past the 64-deep cap.
+        // No terminal value is needed: the depth check fires before more bytes are required.
+        var decoder = RESPDecoder()
+        decoder.append(wire(String(repeating: "*1\r\n", count: 65)))
+        #expect(throws: RESPError.nestingTooDeep) { try decoder.nextValue() }
+    }
+
+    @Test func decodesLegallyNestedArrayAtMaximumDepth() throws {
+        // Exactly 64 levels of nesting is still within the cap and must decode normally.
+        var expected = RESPValue.integer(1)
+        for _ in 0..<64 {
+            expected = .array([expected])
+        }
+
+        var decoder = RESPDecoder()
+        decoder.append(wire(String(repeating: "*1\r\n", count: 64) + ":1\r\n"))
+        #expect(try decoder.nextValue() == expected)
+    }
+
+    // MARK: - Bulk length limit
+
+    @Test func throwsOnBulkLengthExceedingMaximum() {
+        // 512 MB + 1 byte, one past the protocol's maximum bulk length.
+        var decoder = RESPDecoder()
+        decoder.append(wire("$536870913\r\n"))
+        #expect(throws: RESPError.invalidLength) { try decoder.nextValue() }
+    }
+
+    @Test func acceptsBulkLengthAtMaximumAndWaitsForBody() throws {
+        // Exactly 512 MB is a legal declared length; the decoder must accept the header
+        // and wait for the body rather than throwing. Deliberately not allocating the body.
+        var decoder = RESPDecoder()
+        decoder.append(wire("$536870912\r\n"))
+        #expect(try decoder.nextValue() == nil)
     }
 
     // MARK: - Scale
@@ -493,6 +537,29 @@ struct RESPDecoderTests {
         for index in 0..<total {
             #expect(try decoder.nextValue() == .integer(Int64(index)))
         }
+        #expect(try decoder.nextValue() == nil)
+    }
+
+    @Test func compactsBufferMidStreamWithoutCorruptingTrailingPartialReply() throws {
+        // 20,000 four-byte replies (80,000 bytes) push `consumed` past the 64 KB
+        // compaction threshold partway through draining, while a trailing partial bulk
+        // string sits, unconsumed, right after them. This forces `compactIfNeeded()` to
+        // take the mid-stream `buffer.removeFirst(consumed)` branch with live bytes -
+        // both undrained full replies and the partial - still ahead of the cursor.
+        var decoder = RESPDecoder()
+        let replyCount = 20_000
+        decoder.append(wire(String(repeating: ":1\r\n", count: replyCount)))
+        decoder.append(wire("$5\r\nhel")) // trailing partial bulk string, incomplete
+
+        for _ in 0..<replyCount {
+            #expect(try decoder.nextValue() == .integer(1))
+        }
+        // The partial reply is still incomplete, even though a compaction must have
+        // moved the live remainder underneath the cursor by this point.
+        #expect(try decoder.nextValue() == nil)
+
+        decoder.append(wire("lo\r\n"))
+        #expect(try decoder.nextValue() == .bulkString(Data("hello".utf8)))
         #expect(try decoder.nextValue() == nil)
     }
 }

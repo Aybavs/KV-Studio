@@ -24,7 +24,8 @@ private final class FakePeer: @unchecked Sendable {
             guard let base = raw.baseAddress else { return }
             var offset = 0
             while offset < raw.count {
-                let written = Darwin.write(descriptor, base.advanced(by: offset), raw.count - offset)
+                guard let fd = openDescriptor() else { return }
+                let written = Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
                 if written > 0 {
                     offset += written
                     continue
@@ -39,15 +40,12 @@ private final class FakePeer: @unchecked Sendable {
     // Half-closes and drains, so the client always sees every written byte then a clean EOF.
     // A plain close() while unread bytes remain would send RST and discard them.
     func finish() {
-        lock.lock()
-        let alreadyClosed = isClosed
-        lock.unlock()
-        guard !alreadyClosed else { return }
-
-        shutdown(descriptor, SHUT_WR)
+        guard let fd = openDescriptor() else { return }
+        shutdown(fd, SHUT_WR)
         var scratch = [UInt8](repeating: 0, count: 1024)
         while true {
-            let count = Darwin.read(descriptor, &scratch, scratch.count)
+            guard let fd = openDescriptor() else { break }
+            let count = Darwin.read(fd, &scratch, scratch.count)
             if count > 0 { continue }
             if count < 0 && errno == EINTR { continue }
             break
@@ -102,11 +100,18 @@ private final class FakePeer: @unchecked Sendable {
     private func readByte() -> UInt8? {
         var byte: UInt8 = 0
         while true {
-            let result = Darwin.read(descriptor, &byte, 1)
+            guard let fd = openDescriptor() else { return nil }
+            let result = Darwin.read(fd, &byte, 1)
             if result == 1 { return byte }
             if result < 0 && errno == EINTR { continue }
             return nil
         }
+    }
+
+    private func openDescriptor() -> Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return isClosed ? nil : descriptor
     }
 }
 
@@ -160,8 +165,12 @@ private final class FakeServer: @unchecked Sendable {
         acceptSource = source
         source.setEventHandler {
             let accepted = accept(descriptor, nil, nil)
+            guard accepted >= 0 else {
+                if errno == EAGAIN || errno == ECONNABORTED { return }
+                source.cancel()
+                return
+            }
             source.cancel()
-            guard accepted >= 0 else { return }
             var noDelay: Int32 = 1
             setsockopt(accepted, Int32(IPPROTO_TCP), TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
             let peer = FakePeer(descriptor: accepted)
@@ -182,27 +191,47 @@ private final class FakeServer: @unchecked Sendable {
 // MARK: - Async signal
 
 private final class Signal: @unchecked Sendable {
+    private final class Waiter: @unchecked Sendable {
+        var continuation: CheckedContinuation<Void, Never>?
+        var cancelled = false
+    }
+
     private let lock = NSLock()
     private var isSet = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [ObjectIdentifier: Waiter] = [:]
 
     func fire() {
         lock.lock()
         isSet = true
-        let pending = waiters
+        let pending = waiters.values.compactMap { $0.continuation }
         waiters.removeAll()
         lock.unlock()
         pending.forEach { $0.resume() }
     }
 
     func wait() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        let token = Waiter()
+        let key = ObjectIdentifier(token)
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if isSet || token.cancelled {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    token.continuation = continuation
+                    waiters[key] = token
+                    lock.unlock()
+                }
+            }
+        } onCancel: {
             lock.lock()
-            if isSet {
+            // onCancel can run before the continuation is registered; the flag covers that case.
+            if let waiter = waiters.removeValue(forKey: key) {
                 lock.unlock()
-                continuation.resume()
+                waiter.continuation?.resume()
             } else {
-                waiters.append(continuation)
+                token.cancelled = true
                 lock.unlock()
             }
         }
@@ -430,13 +459,13 @@ private final class Signal: @unchecked Sendable {
             let server = try FakeServer { peer in
                 _ = peer.readCommand()
             }
+            defer { server.stop() }
             let endpoint = ConnectionEndpoint(host: "127.0.0.1", port: server.port)
             let dialling = Task { try await connection.connect(to: endpoint) }
             await Task.yield()
             await connection.disconnect()
             // Deadlocks here before the fix: the pending readiness continuation is dropped.
             _ = try? await dialling.value
-            server.stop()
         }
 
         let healthy = try FakeServer { peer in
@@ -486,52 +515,56 @@ private final class Signal: @unchecked Sendable {
 
     @Test(.timeLimit(.minutes(1)))
     func cancellingAParkedCallerFailsFastAndKeepsTheQueueIntact() async throws {
-        let commandRead = Signal()
-        let releaseReply = DispatchSemaphore(value: 0)
-        let server = try FakeServer { peer in
-            guard let first = peer.readCommand(), first.count == 2 else { return }
-            commandRead.fire()
-            releaseReply.wait()
-            peer.write(Data("$\(first[1].count)\r\n".utf8) + first[1] + Data("\r\n".utf8))
-            while let next = peer.readCommand(), next.count == 2 {
-                peer.write(Data("$\(next[1].count)\r\n".utf8) + next[1] + Data("\r\n".utf8))
+        // One shot could cancel before the task ever reaches the queue and pass green
+        // without exercising the race, so retry the whole sequence with fresh state each time.
+        for _ in 0..<20 {
+            let commandRead = Signal()
+            let releaseReply = DispatchSemaphore(value: 0)
+            let server = try FakeServer { peer in
+                guard let first = peer.readCommand(), first.count == 2 else { return }
+                commandRead.fire()
+                releaseReply.wait()
+                peer.write(Data("$\(first[1].count)\r\n".utf8) + first[1] + Data("\r\n".utf8))
+                while let next = peer.readCommand(), next.count == 2 {
+                    peer.write(Data("$\(next[1].count)\r\n".utf8) + next[1] + Data("\r\n".utf8))
+                }
             }
-        }
-        defer {
+            defer {
+                releaseReply.signal()
+                server.stop()
+            }
+
+            let connection = try await connect(to: server)
+            let holder = Task { try await connection.send([self.bytes("ECHO"), self.bytes("held")]) }
+            await commandRead.wait()
+
+            let parkedEntered = Signal()
+            let parked = Task { () -> RESPValue in
+                parkedEntered.fire()
+                return try await connection.send([self.bytes("ECHO"), self.bytes("parked")])
+            }
+            await parkedEntered.wait()
+            await Task.yield()
+
+            let followerEntered = Signal()
+            let follower = Task { () -> RESPValue in
+                followerEntered.fire()
+                return try await connection.send([self.bytes("ECHO"), self.bytes("follower")])
+            }
+            await followerEntered.wait()
+            await Task.yield()
+
+            parked.cancel()
+            // Hangs until the holder finishes before the fix; the holder is still stalled here.
+            await #expect(throws: CancellationError.self) {
+                _ = try await parked.value
+            }
+
             releaseReply.signal()
-            server.stop()
+            #expect(try await holder.value == .bulkString(bytes("held")))
+            #expect(try await follower.value == .bulkString(bytes("follower")))
+            #expect(await connection.isConnected)
+            await connection.disconnect()
         }
-
-        let connection = try await connect(to: server)
-        let holder = Task { try await connection.send([self.bytes("ECHO"), self.bytes("held")]) }
-        await commandRead.wait()
-
-        let parkedEntered = Signal()
-        let parked = Task { () -> RESPValue in
-            parkedEntered.fire()
-            return try await connection.send([self.bytes("ECHO"), self.bytes("parked")])
-        }
-        await parkedEntered.wait()
-        await Task.yield()
-
-        let followerEntered = Signal()
-        let follower = Task { () -> RESPValue in
-            followerEntered.fire()
-            return try await connection.send([self.bytes("ECHO"), self.bytes("follower")])
-        }
-        await followerEntered.wait()
-        await Task.yield()
-
-        parked.cancel()
-        // Hangs until the holder finishes before the fix; the holder is still stalled here.
-        await #expect(throws: CancellationError.self) {
-            _ = try await parked.value
-        }
-
-        releaseReply.signal()
-        #expect(try await holder.value == .bulkString(bytes("held")))
-        #expect(try await follower.value == .bulkString(bytes("follower")))
-        #expect(await connection.isConnected)
-        await connection.disconnect()
     }
 }

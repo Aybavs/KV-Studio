@@ -10,20 +10,24 @@ struct Preferences: Equatable, Codable, Sendable {
 struct PreferencesStore: Sendable {
     let paths: ManagedPaths
 
+    private func clamped(_ preferences: Preferences) -> Preferences {
+        var preferences = preferences
+        if preferences.localPort == 0 {
+            preferences.localPort = Preferences.default.localPort
+        }
+        return preferences
+    }
+
     func loadPreferences() -> Preferences {
         guard let data = try? Data(contentsOf: paths.preferencesFile),
               let preferences = try? JSONDecoder().decode(Preferences.self, from: data) else {
             return .default
         }
-        return preferences
+        return clamped(preferences)
     }
 
     func savePreferences(_ preferences: Preferences) throws {
-        var preferences = preferences
-        if preferences.localPort == 0 {
-            preferences.localPort = Preferences.default.localPort
-        }
-        let data = try JSONEncoder().encode(preferences)
+        let data = try JSONEncoder().encode(clamped(preferences))
         try data.write(to: paths.preferencesFile, options: .atomic)
     }
 

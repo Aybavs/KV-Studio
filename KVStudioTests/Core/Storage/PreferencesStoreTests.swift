@@ -45,6 +45,14 @@ struct PreferencesStoreTests {
         #expect(loaded.localPort == 6380)
     }
 
+    @Test func loadingPortZeroFromDiskClampsToDefault() throws {
+        let store = makeStore()
+        try Data(#"{"localBindHost":"127.0.0.1","localPort":0}"#.utf8).write(to: store.paths.preferencesFile, options: .atomic)
+
+        let loaded = store.loadPreferences()
+        #expect(loaded.localPort == 6380)
+    }
+
     @Test func loadLastConnectionTargetReturnsNilWhenFileMissing() {
         let store = makeStore()
         #expect(store.loadLastConnectionTarget() == nil)

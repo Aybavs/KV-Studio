@@ -66,10 +66,12 @@ struct CompatibilityProbe: Sendable {
         at step: ProbeStep?,
         within budget: Duration
     ) -> CompatibilityOutcome {
+        if error is BoundedConnectionError {
+            return .unreachable(.timedOut(step: step, budget: budget))
+        }
+
         guard let step else {
             switch error {
-            case is BoundedConnectionError:
-                return .unreachable(.timedOut(budget))
             case let error as ConnectionError:
                 return .unreachable(unreachable(from: error))
             default:
@@ -78,8 +80,6 @@ struct CompatibilityProbe: Sendable {
         }
 
         switch error {
-        case is BoundedConnectionError:
-            return .protocolFailure(step: step, reason: .timedOut(budget))
         case let error as ConnectionError:
             return .protocolFailure(step: step, reason: protocolFailure(from: error))
         default:
@@ -107,7 +107,7 @@ struct CompatibilityProbe: Sendable {
         case .connectFailed(let detail):
             return .connectFailed(detail)
         default:
-            return .connectFailed(error.errorDescription ?? String(describing: error))
+            return .connectFailed(String(describing: error))
         }
     }
 }

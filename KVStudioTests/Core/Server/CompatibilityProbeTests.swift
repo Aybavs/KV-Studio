@@ -106,18 +106,24 @@ struct CompatibilityProbeTests {
         ))
     }
 
-    @Test func wellFormedReplyWithTheWrongShapeIsIncompatible() async throws {
+    @Test(arguments: [
+        ([":1\r\n"], ProbeStep.ping, RESPValue.integer(1)),
+        (["+PONG\r\n", "+OK\r\n"], .dbSize, .simpleString(Data("OK".utf8))),
+        (["+PONG\r\n", ":0\r\n", "*2\r\n$1\r\n0\r\n$3\r\nfoo\r\n"], .scan,
+         .array([.bulkString(Data("0".utf8)), .bulkString(Data("foo".utf8))]))
+    ])
+    func wellFormedRepliesWithTheWrongShapeAreIncompatible(
+        replies: [String],
+        step: ProbeStep,
+        reply: RESPValue
+    ) async throws {
         let log = CommandLog()
-        let flatPage = "*2\r\n$1\r\n0\r\n$3\r\nfoo\r\n"
-        let server = try scriptedServer(log, replies: [pong, zeroKeys, flatPage])
+        let server = try scriptedServer(log, replies: replies)
         defer { server.stop() }
 
         let outcome = try await probe.run(against: endpoint(server))
 
-        #expect(outcome == .incompatible(
-            step: .scan,
-            reason: .unexpectedReply(.array([.bulkString(bytes("0")), .bulkString(bytes("foo"))]))
-        ))
+        #expect(outcome == .incompatible(step: step, reason: .unexpectedReply(reply)))
     }
 
     // MARK: - Protocol failure
@@ -159,10 +165,40 @@ struct CompatibilityProbeTests {
         let outcome = try await probe.run(against: holder.endpoint)
         let elapsed = ContinuousClock.now - started
 
-        #expect(outcome == .protocolFailure(step: .ping, reason: .timedOut(budget)))
+        #expect(outcome == .unreachable(.timedOut(step: .ping, budget: budget)))
         #expect(elapsed >= budget)
         #expect(elapsed < .seconds(2))
         #expect(holder.isStillListening)
+    }
+
+    @Test func aServerThatFallsSilentMidProbeIsUnreachableNotAProtocolFailure() async throws {
+        let log = CommandLog()
+        let release = DispatchSemaphore(value: 0)
+        let server = try FakeServer { peer in
+            for reply in [self.pong, self.zeroKeys] {
+                guard let command = peer.readCommand() else { return }
+                log.record(command)
+                peer.write(Data(reply.utf8))
+            }
+            guard let silenced = peer.readCommand() else { return }
+            log.record(silenced)
+            release.wait()
+        }
+        defer {
+            release.signal()
+            server.stop()
+        }
+        let budget = Duration.milliseconds(300)
+        let probe = CompatibilityProbe(budget: budget)
+
+        let started = ContinuousClock.now
+        let outcome = try await probe.run(against: endpoint(server))
+        let elapsed = ContinuousClock.now - started
+
+        #expect(outcome == .unreachable(.timedOut(step: .scan, budget: budget)))
+        #expect(elapsed >= budget)
+        #expect(elapsed < .seconds(2))
+        #expect(log.recorded.count == 3)
     }
 
     // MARK: - Unreachable
@@ -193,10 +229,11 @@ struct CompatibilityProbeTests {
 
         let task = Task { try await probe.run(against: holder.endpoint) }
         try await Task.sleep(for: .milliseconds(150))
+        let cancelled = ContinuousClock.now
         task.cancel()
 
         await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(holder.isStillListening)
+        #expect(ContinuousClock.now - cancelled < .seconds(1))
     }
 
     // MARK: - Error classes
@@ -204,12 +241,12 @@ struct CompatibilityProbeTests {
     @Test(arguments: [
         ("ERR unknown command 'DBSIZE'", ServerErrorClass.unknownCommand),
         ("ERR wrong number of arguments for 'scan' command", .wrongArgumentCount),
-        ("ERR invalid cursor", .invalidCursor),
+        ("ERR invalid cursor 'abc'", .invalidCursor),
         ("ERR scan MATCH cannot change during iteration", .scanMatchChanged),
-        ("ERR scan session limit reached", .scanSessionLimit),
-        ("ERR server is shutting down", .shuttingDown),
+        ("ERR scan session limit reached (64)", .scanSessionLimit),
+        ("ERR server is shutting down, retry later", .shuttingDown),
         ("ERR max number of clients reached", .maxClients),
-        ("ERR syntax error", .syntaxError),
+        ("ERR syntax error near 'COUNT'", .syntaxError),
         ("ERR Protocol error: invalid multibulk length", .protocolError)
     ])
     func classifiesDocumentedErrorPrefixes(message: String, expected: ServerErrorClass) {

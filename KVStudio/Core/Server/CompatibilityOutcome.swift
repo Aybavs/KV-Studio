@@ -41,7 +41,8 @@ enum ServerErrorClass: CaseIterable, Equatable, Sendable {
 enum UnreachableReason: Equatable, Sendable {
     case invalidPort(UInt16)
     case connectFailed(String)
-    case timedOut(Duration)
+    // A silent peer is unreachable at whichever step it fell silent; nil is before any command.
+    case timedOut(step: ProbeStep?, budget: Duration)
 }
 
 enum IncompatibilityReason: Equatable, Sendable {
@@ -53,7 +54,6 @@ enum ProtocolFailureReason: Equatable, Sendable {
     case malformedReply(RESPError)
     case connectionClosed
     case transportFailure(String)
-    case timedOut(Duration)
 }
 
 enum CompatibilityOutcome: Equatable, Sendable {

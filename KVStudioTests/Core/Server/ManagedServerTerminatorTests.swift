@@ -47,7 +47,6 @@ struct ManagedServerTerminatorTests {
         #expect(process.terminationStatus == SIGTERM)
     }
 
-    // Escalation must be real and bounded: this fixture ignores SIGTERM outright.
     @Test func escalatesToSIGKILLWhenTerminationIsIgnored() async throws {
         let fixtures = try ProcessFixtures()
         defer { fixtures.remove() }
@@ -95,7 +94,6 @@ struct ManagedServerTerminatorTests {
         #expect(outcome == .notRunning)
     }
 
-    // A recycled pid belongs to somebody else; signalling it would be the orphan bug in reverse.
     @Test func refusesToSignalAProcessWhoseIdentityDoesNotMatch() async throws {
         let fixtures = try ProcessFixtures()
         defer { fixtures.remove() }
@@ -114,6 +112,26 @@ struct ManagedServerTerminatorTests {
 
         #expect(outcome == .notRunning)
         #expect(ProcessIdentity.isAlive(pid: pid, since: actual))
+    }
+
+    @Test func refusesToSignalAPIDWithNoRecordedIdentity() async throws {
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+        let script = try await fixtures.launchableScript(named: "sleeper", body: FixtureScript.sleepsForever)
+        let process = try launch(script)
+        let pid = process.processIdentifier
+        defer { kill(pid, SIGKILL) }
+        try await fixtures.waitUntilReady(script)
+
+        let outcome = await ManagedServerTerminator.terminate(
+            pid: pid,
+            since: nil,
+            graceful: .milliseconds(200),
+            forced: .milliseconds(200)
+        )
+
+        #expect(outcome == .notRunning)
+        #expect(ProcessIdentity.isPIDInUse(pid))
     }
 
     @Test func survivesCancellationOfTheCallingTask() async throws {

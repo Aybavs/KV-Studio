@@ -139,6 +139,48 @@ struct ManagedServerLiveTests {
         }
     }
 
+    // A Studio crash between the spawn and the pid write leaves only an intent record behind.
+    @Test func reclaimsAnOrphanNamedOnlyByAnIntentRecord() async throws {
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+        let orphanBinary = try fixtures.executableCopy(named: "kv-server", of: binary)
+
+        let (controller, paths, port) = try makeController()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let endpoint = ConnectionEndpoint(host: "127.0.0.1", port: port)
+
+        let startedAt = Date()
+        let orphan = Process()
+        orphan.executableURL = orphanBinary
+        orphan.arguments = ["--host", "127.0.0.1", "--port", String(port), "--loglevel", "error"]
+        orphan.standardOutput = FileHandle.nullDevice
+        orphan.standardError = FileHandle.nullDevice
+        try orphan.run()
+        let orphanPID = orphan.processIdentifier
+        defer { kill(orphanPID, SIGKILL) }
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while (try? await client(endpoint).ping()) == nil && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try await client(endpoint).ping()
+
+        try ManagedServerRecordStore(paths: paths).save(
+            .intent(endpoint: endpoint, binaryPath: orphanBinary.path, startedAt: startedAt)
+        )
+
+        let pid = try await controller.start()
+        defer { Task { await controller.stop() } }
+
+        #expect(pid != orphanPID)
+        #expect(!ProcessIdentity.isPIDInUse(orphanPID))
+        #expect(await controller.state == .running(pid))
+        try await client(endpoint).ping()
+
+        await controller.stop()
+        #expect(!ProcessIdentity.isPIDInUse(pid))
+    }
+
     // Port 6380 held by somebody else is Task 11's conflict flow, never ours to resolve by force.
     @Test func refusesToStartWhenAnotherServerOwnsThePort() async throws {
         try await withKVServer(binary: binary) { occupant in

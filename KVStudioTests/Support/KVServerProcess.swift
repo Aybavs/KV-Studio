@@ -23,7 +23,6 @@ enum KVServerBinaryLocator {
 }
 
 enum KVServerProcessError: Error {
-    case portAllocationFailed
     case processExitedBeforeReady(Int32)
     case readinessTimedOut
 }
@@ -142,35 +141,9 @@ final class KVServerProcess: @unchecked Sendable {
     }
 
     static func allocatePort() throws -> UInt16 {
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { throw KVServerProcessError.portAllocationFailed }
-        defer { close(descriptor) }
-
-        var reuse: Int32 = 1
-        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-
-        let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bound == 0 else { throw KVServerProcessError.portAllocationFailed }
-
-        var assigned = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let named = withUnsafeMutablePointer(to: &assigned) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(descriptor, $0, &length)
-            }
-        }
-        guard named == 0 else { throw KVServerProcessError.portAllocationFailed }
-        return UInt16(bigEndian: assigned.sin_port)
+        let bound = try boundLoopbackSocket(backlog: 1)
+        close(bound.descriptor)
+        return bound.port
     }
 }
 

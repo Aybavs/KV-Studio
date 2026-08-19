@@ -45,6 +45,16 @@ struct ProcessFixtures {
         return url
     }
 
+    // proc_pidpath reports a script's interpreter, so identifying a process by path needs a real
+    // Mach-O. System binaries are arm64e and refuse to run as copies, so callers pass their own.
+    func executableCopy(named name: String, of source: URL) throws -> URL {
+        let url = directory.appendingPathComponent(name, isDirectory: false)
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.copyItem(at: source, to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
+    }
+
     func nonExecutableFile(named name: String) throws -> URL {
         let url = directory.appendingPathComponent(name, isDirectory: false)
         try "not a program\n".write(to: url, atomically: true, encoding: .utf8)
@@ -89,6 +99,8 @@ enum FixtureScript {
     static let sleepsForever = announceReady + "while true; do sleep 0.2; done\n"
 
     static let ignoresTermination = "trap '' TERM\n" + announceReady + "while true; do sleep 0.2; done\n"
+
+    static let recordsArguments = "printf '%s\\n' \"$@\" > \"$0.args\"\n" + sleepsForever
 
     static let exitsEarly = "sleep 0.05\nexit 3\n"
 

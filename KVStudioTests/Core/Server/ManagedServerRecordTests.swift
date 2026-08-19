@@ -53,6 +53,40 @@ struct ManagedServerRecordTests {
         ManagedServerRecordStore(paths: paths).clear()
     }
 
+    @Test func intentRecordsCarryNoProcess() throws {
+        let endpoint = ConnectionEndpoint(host: "127.0.0.1", port: 6380)
+        let intent = ManagedServerRecord.intent(
+            endpoint: endpoint,
+            binaryPath: "/tmp/kv-server",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        #expect(intent.isIntent)
+        #expect(!intent.identifiesLiveProcess)
+        #expect(intent.endpoint == endpoint)
+
+        let launched = intent.launched(pid: 4242, processStartTime: ProcessStartTime(seconds: 111, microseconds: 222))
+        #expect(!launched.isIntent)
+        #expect(launched.pid == 4242)
+        #expect(launched.binaryPath == intent.binaryPath)
+        #expect(launched.startedAt == intent.startedAt)
+    }
+
+    @Test func intentRecordsSurviveTheStateFile() throws {
+        let paths = try makePaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let store = ManagedServerRecordStore(paths: paths)
+        let intent = ManagedServerRecord.intent(
+            endpoint: ConnectionEndpoint(host: "127.0.0.1", port: 6380),
+            binaryPath: "/tmp/kv-server",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        try store.save(intent)
+        #expect(try #require(store.load()).isIntent)
+        #expect(store.load() == intent)
+    }
+
     @Test func exposesTheRecordedEndpoint() {
         #expect(makeRecord().endpoint == ConnectionEndpoint(host: "127.0.0.1", port: 6380))
     }

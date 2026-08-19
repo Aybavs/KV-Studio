@@ -5,7 +5,7 @@ actor ManagedServerController {
 
     private struct Child {
         let pid: pid_t
-        let identity: ProcessStartTime?
+        let identity: ProcessStartTime
         let process: Process?
         let endpoint: ConnectionEndpoint
     }
@@ -97,8 +97,7 @@ actor ManagedServerController {
             currentState = .running(pid)
             return pid
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            currentState = .failed(message)
+            currentState = .failed(Self.message(for: error))
             throw error
         }
     }
@@ -110,55 +109,111 @@ actor ManagedServerController {
             throw ManagedServerError.storageUnavailable(error.localizedDescription)
         }
 
-        if let adopted = await adoptRecordedProcess() { return adopted }
-
         let settings = preferences.loadPreferences()
         let endpoint = ConnectionEndpoint(host: settings.localBindHost, port: settings.localPort)
-        let binary = try resolver.resolve(in: paths)
 
-        if await Self.acceptsConnections(endpoint) { throw ManagedServerError.portInUse(endpoint) }
+        if let adopted = try await reconcileRecord(against: endpoint) { return adopted }
+
+        let binary = try resolver.resolve(in: paths)
+        if await Self.acceptsConnections(endpoint, within: timeouts.probe) {
+            throw ManagedServerError.portInUse(endpoint)
+        }
+
+        return try await launch(binary: binary, on: endpoint)
+    }
+
+    // MARK: - Ownership
+
+    // Adoption is what makes "exactly one managed server" survive a Studio crash.
+    private func reconcileRecord(against endpoint: ConnectionEndpoint) async throws -> pid_t? {
+        guard let record = records.load() else { return nil }
+
+        guard !record.isIntent else {
+            try await reclaimIntent(record)
+            records.clear()
+            return nil
+        }
+
+        guard record.identifiesLiveProcess, let pid = record.pid, let identity = record.processStartTime else {
+            records.clear()
+            return nil
+        }
+
+        if record.endpoint == endpoint, await Self.answersPing(endpoint, within: timeouts.probe) {
+            child = Child(pid: pid, identity: identity, process: nil, endpoint: record.endpoint)
+            return pid
+        }
+
+        // Wrong port or no longer answering, but the identity proves the process is ours: take it
+        // back rather than abandon it and spawn a second server onto the same append-only file.
+        try await reclaim(pid: pid, since: identity)
+        records.clear()
+        return nil
+    }
+
+    // An intent record names a spawn that may have outlived the Studio that started it.
+    private func reclaimIntent(_ record: ManagedServerRecord) async throws {
+        guard await Self.acceptsConnections(record.endpoint, within: timeouts.probe) else { return }
+
+        let candidates = ProcessIdentity.pids(
+            runningExecutableAt: record.binaryPath,
+            startedNoEarlierThan: record.startedAt
+        )
+        guard candidates.count == 1, let pid = candidates.first,
+              let identity = ProcessIdentity.startTime(of: pid) else {
+            throw ManagedServerError.unreclaimedServer(record.endpoint)
+        }
+        try await reclaim(pid: pid, since: identity)
+    }
+
+    private func reclaim(pid: pid_t, since identity: ProcessStartTime) async throws {
+        let outcome = await ManagedServerTerminator.terminate(
+            pid: pid,
+            since: identity,
+            graceful: timeouts.gracefulShutdown,
+            forced: timeouts.forcedShutdown
+        )
+        guard outcome != .stillRunning else { throw ManagedServerError.terminationFailed(pid) }
+    }
+
+    // MARK: - Launch
+
+    private func launch(binary: URL, on endpoint: ConnectionEndpoint) async throws -> pid_t {
+        let intent = ManagedServerRecord.intent(endpoint: endpoint, binaryPath: binary.path, startedAt: Date())
+        do {
+            try records.save(intent)
+        } catch {
+            throw ManagedServerError.storageUnavailable(error.localizedDescription)
+        }
 
         let process = try spawn(binary: binary, endpoint: endpoint)
         let pid = process.processIdentifier
-        child = Child(pid: pid, identity: ProcessIdentity.startTime(of: pid), process: process, endpoint: endpoint)
+
+        guard let identity = ProcessIdentity.startTime(of: pid) else {
+            let wasRunning = process.isRunning
+            if wasRunning { process.terminate() }
+            await closeOutput()
+            records.clear()
+            throw wasRunning
+                ? ManagedServerError.launchFailed("no process identity for pid \(pid)")
+                : ManagedServerError.exitedDuringStartup(process.terminationStatus)
+        }
+        child = Child(pid: pid, identity: identity, process: process, endpoint: endpoint)
 
         do {
-            guard let identity = child?.identity else {
-                throw process.isRunning
-                    ? ManagedServerError.launchFailed("no process identity for pid \(pid)")
-                    : ManagedServerError.exitedDuringStartup(process.terminationStatus)
-            }
             do {
-                try records.save(
-                    ManagedServerRecord(
-                        pid: pid,
-                        host: endpoint.host,
-                        port: endpoint.port,
-                        binaryPath: binary.path,
-                        processStartTime: identity,
-                        startedAt: Date()
-                    )
-                )
+                try records.save(intent.launched(pid: pid, processStartTime: identity))
             } catch {
                 throw ManagedServerError.storageUnavailable(error.localizedDescription)
             }
             try await waitUntilReady(process: process, endpoint: endpoint)
         } catch {
-            await releaseChild()
+            if await discardChild() == .stillRunning {
+                throw ManagedServerError.terminationFailed(pid)
+            }
             throw error
         }
         return pid
-    }
-
-    // Adoption is what makes "exactly one managed server" survive a Studio crash.
-    private func adoptRecordedProcess() async -> pid_t? {
-        guard let record = records.load() else { return nil }
-        guard record.identifiesLiveProcess, await Self.answersPing(record.endpoint) else {
-            records.clear()
-            return nil
-        }
-        child = Child(pid: record.pid, identity: record.processStartTime, process: nil, endpoint: record.endpoint)
-        return record.pid
     }
 
     private func spawn(binary: URL, endpoint: ConnectionEndpoint) throws -> Process {
@@ -190,7 +245,11 @@ actor ManagedServerController {
         do {
             try process.run()
         } catch {
-            closeOutput()
+            for drain in drains { drain.finish() }
+            self.drains = []
+            sink.close()
+            logSink = nil
+            records.clear()
             throw ManagedServerError.launchFailed(error.localizedDescription)
         }
         return process
@@ -203,7 +262,7 @@ actor ManagedServerController {
             guard process.isRunning else {
                 throw ManagedServerError.exitedDuringStartup(process.terminationStatus)
             }
-            if await Self.answersPing(endpoint) { return }
+            if await Self.answersPing(endpoint, within: timeouts.probe) { return }
             guard ContinuousClock.now < deadline else {
                 throw ManagedServerError.readinessTimedOut(endpoint, timeouts.readiness)
             }
@@ -214,47 +273,97 @@ actor ManagedServerController {
     // MARK: - Stop
 
     private func performStop() async {
-        await releaseChild()
-        currentState = .stopped
-    }
-
-    private func releaseChild() async {
-        if let child {
-            _ = await ManagedServerTerminator.terminate(
-                pid: child.pid,
-                since: child.identity,
-                graceful: timeouts.gracefulShutdown,
-                forced: timeouts.forcedShutdown
-            )
+        let outcome = await discardChild()
+        if outcome == .stillRunning, let child {
+            currentState = .failed(Self.message(for: ManagedServerError.terminationFailed(child.pid)))
+        } else {
+            currentState = .stopped
         }
-        child = nil
-        closeOutput()
-        records.clear()
     }
 
-    private func closeOutput() {
+    // A process that survived SIGKILL keeps its record: that record is the only way back to it.
+    private func discardChild() async -> ManagedServerTerminationOutcome {
+        guard let child else {
+            await closeOutput()
+            records.clear()
+            return .notRunning
+        }
+
+        let outcome = await ManagedServerTerminator.terminate(
+            pid: child.pid,
+            since: child.identity,
+            graceful: timeouts.gracefulShutdown,
+            forced: timeouts.forcedShutdown
+        )
+        guard outcome != .stillRunning else { return outcome }
+
+        self.child = nil
+        await closeOutput()
+        records.clear()
+        return outcome
+    }
+
+    private func closeOutput() async {
+        for drain in drains { await drain.waitUntilFinished(within: timeouts.outputDrain) }
         for drain in drains { drain.finish() }
         drains = []
         logSink?.close()
         logSink = nil
     }
 
-    // MARK: - Probes
-
-    private static func acceptsConnections(_ endpoint: ConnectionEndpoint) async -> Bool {
-        let connection = KVConnection()
-        let connected = (try? await connection.connect(to: endpoint)) != nil
-        await connection.disconnect()
-        return connected
+    private static func message(for error: any Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
-    private static func answersPing(_ endpoint: ConnectionEndpoint) async -> Bool {
+    // MARK: - Probes
+
+    private static func acceptsConnections(_ endpoint: ConnectionEndpoint, within budget: Duration) async -> Bool {
+        await probe(endpoint, ping: false, within: budget)
+    }
+
+    private static func answersPing(_ endpoint: ConnectionEndpoint, within budget: Duration) async -> Bool {
+        await probe(endpoint, ping: true, within: budget)
+    }
+
+    // KVConnection deliberately has no read timeout, so a peer that accepts and never replies would
+    // park forever. Cancelling the connection from the timeout arm is what unparks it.
+    private static func probe(_ endpoint: ConnectionEndpoint, ping: Bool, within budget: Duration) async -> Bool {
         let connection = KVConnection()
-        var answered = false
-        if (try? await connection.connect(to: endpoint)) != nil {
-            answered = (try? await KVClient(connection: connection).ping()) != nil
+        let answered = await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                guard (try? await connection.connect(to: endpoint)) != nil else { return false }
+                guard ping else { return true }
+                return (try? await KVClient(connection: connection).ping()) != nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: budget)
+                await connection.disconnect()
+                return nil
+            }
+
+            var outcome: Bool?
+            while let next = await group.next() {
+                if let next {
+                    outcome = next
+                    break
+                }
+            }
+            group.cancelAll()
+            return outcome ?? false
         }
         await connection.disconnect()
         return answered
+    }
+
+    deinit {
+        for drain in drains { drain.finish() }
+        logSink?.close()
+        guard let child else { return }
+        let (pid, identity) = (child.pid, child.identity)
+        let graceful = timeouts.gracefulShutdown
+        let forced = timeouts.forcedShutdown
+        Task.detached {
+            _ = await ManagedServerTerminator.terminate(pid: pid, since: identity, graceful: graceful, forced: forced)
+        }
     }
 }

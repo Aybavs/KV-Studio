@@ -6,7 +6,6 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 struct ProcessOutputDrainTests {
 
-    // An undrained pipe blocks the child at ~64KB; this fixture writes far more than that.
     @Test func drainsMoreThanOnePipeBufferWithoutBlockingTheChild() async throws {
         let fixtures = try ProcessFixtures()
         defer { fixtures.remove() }
@@ -82,6 +81,27 @@ struct ProcessOutputDrainTests {
         sink.close()
 
         #expect(lines.snapshot() == ["complete", "incomplete"])
+    }
+}
+
+extension ProcessOutputDrainTests {
+
+    @Test func reportsFinishedOnceThePipeReachesEOF() async throws {
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+        let sink = ServerLogSink(url: fixtures.directory.appendingPathComponent("kv-server.log"))
+        let pipe = Pipe()
+        let drain = ProcessOutputDrain(reading: pipe.fileHandleForReading, sink: sink) { _ in }
+
+        await drain.waitUntilFinished(within: .milliseconds(200))
+        #expect(!drain.isFinished)
+
+        try pipe.fileHandleForWriting.close()
+        await drain.waitUntilFinished(within: .seconds(5))
+        #expect(drain.isFinished)
+
+        drain.finish()
+        sink.close()
     }
 }
 

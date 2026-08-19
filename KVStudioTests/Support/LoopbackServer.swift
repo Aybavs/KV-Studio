@@ -7,6 +7,43 @@ enum FakeServerError: Error {
     case setupFailed
 }
 
+func boundLoopbackSocket(backlog: Int32) throws -> (descriptor: Int32, port: UInt16) {
+    let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { throw FakeServerError.setupFailed }
+
+    var reuse: Int32 = 1
+    setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+    let bound = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard bound == 0, listen(descriptor, backlog) == 0 else {
+        Darwin.close(descriptor)
+        throw FakeServerError.setupFailed
+    }
+
+    var assigned = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let named = withUnsafeMutablePointer(to: &assigned) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            getsockname(descriptor, $0, &length)
+        }
+    }
+    guard named == 0 else {
+        Darwin.close(descriptor)
+        throw FakeServerError.setupFailed
+    }
+    return (descriptor, UInt16(bigEndian: assigned.sin_port))
+}
+
 final class FakePeer: @unchecked Sendable {
     private let descriptor: Int32
     private let lock = NSLock()
@@ -118,41 +155,9 @@ final class FakeServer: @unchecked Sendable {
     private let acceptSource: DispatchSourceRead
 
     init(label: String = #function, handler: @escaping @Sendable (FakePeer) -> Void) throws {
-        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { throw FakeServerError.setupFailed }
-
-        var reuse: Int32 = 1
-        setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-
-        let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bound == 0, listen(descriptor, 8) == 0 else {
-            Darwin.close(descriptor)
-            throw FakeServerError.setupFailed
-        }
-
-        var assigned = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let named = withUnsafeMutablePointer(to: &assigned) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                getsockname(descriptor, $0, &length)
-            }
-        }
-        guard named == 0 else {
-            Darwin.close(descriptor)
-            throw FakeServerError.setupFailed
-        }
-
-        port = UInt16(bigEndian: assigned.sin_port)
+        let bound = try boundLoopbackSocket(backlog: 8)
+        let descriptor = bound.descriptor
+        port = bound.port
 
         // A readable-source accept never blocks a thread, so `stop()` is deterministic.
         let work = DispatchQueue(label: "fake-server.work.\(label)")

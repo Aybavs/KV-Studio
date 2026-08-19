@@ -44,17 +44,45 @@ final class ProcessOutputDrain: @unchecked Sendable {
         self.sink = sink
         self.onLine = onLine
         handle.readabilityHandler = { [weak self] handle in
-            guard let self else { return }
-            let data = handle.availableData
+            guard let self, let data = self.read(from: handle) else { return }
             if data.isEmpty {
-                self.finish()
+                self.complete(closingDescriptor: true)
             } else {
                 self.consume(data)
             }
         }
     }
 
+    var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished
+    }
+
+    // Detached so a cancelled caller still gives the pipe its chance to reach EOF.
+    func waitUntilFinished(within budget: Duration) async {
+        await Task.detached(priority: .userInitiated) { [self] in
+            let deadline = ContinuousClock.now.advanced(by: budget)
+            while !isFinished && ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }.value
+    }
+
     func finish() {
+        complete(closingDescriptor: false)
+    }
+
+    // Only the handler ever reads or closes, and only under the lock, so the descriptor cannot be
+    // closed out from under an in-flight read.
+    private func read(from handle: FileHandle) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return nil }
+        return handle.availableData
+    }
+
+    private func complete(closingDescriptor: Bool) {
         lock.lock()
         guard !finished else {
             lock.unlock()
@@ -63,11 +91,11 @@ final class ProcessOutputDrain: @unchecked Sendable {
         finished = true
         let tail = buffer
         buffer = Data()
+        if closingDescriptor { try? handle.close() }
         lock.unlock()
 
         handle.readabilityHandler = nil
         if !tail.isEmpty { onLine(String(decoding: tail, as: UTF8.self)) }
-        try? handle.close()
     }
 
     private func consume(_ data: Data) {

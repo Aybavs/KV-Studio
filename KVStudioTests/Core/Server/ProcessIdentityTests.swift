@@ -35,7 +35,6 @@ struct ProcessIdentityTests {
         #expect(childIdentity != selfIdentity)
     }
 
-    // A recorded pid that now belongs to a different process must not read as alive.
     @Test func rejectsRecycledPID() async throws {
         let fixtures = try ProcessFixtures()
         defer { fixtures.remove() }
@@ -56,8 +55,50 @@ struct ProcessIdentityTests {
         #expect(!ProcessIdentity.isAlive(pid: pid, since: stale))
     }
 
-    @Test func treatsAbsentIdentityAsNotAlive() {
+    @Test func refusesToVouchForAPIDWithoutARecordedIdentity() {
+        #expect(!ProcessIdentity.isAlive(pid: getpid(), since: nil))
         #expect(!ProcessIdentity.isAlive(pid: 900_000, since: nil))
-        #expect(ProcessIdentity.isAlive(pid: getpid(), since: nil))
+    }
+
+    @Test func reportsWhetherAPIDIsInUse() async throws {
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+        let script = try await fixtures.launchableScript(named: "sleeper", body: FixtureScript.sleepsForever)
+
+        let process = Process()
+        process.executableURL = script
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let pid = process.processIdentifier
+
+        #expect(ProcessIdentity.isPIDInUse(pid))
+        #expect(ProcessIdentity.isPIDInUse(getpid()))
+        #expect(!ProcessIdentity.isPIDInUse(900_000))
+
+        kill(pid, SIGKILL)
+        while ProcessIdentity.isPIDInUse(pid) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    @Test func readsTheExecutablePathOfALiveProcess() throws {
+        let path = try #require(ProcessIdentity.executablePath(of: getpid()))
+        #expect(path.hasSuffix("xctest") || path.contains("KV Studio"))
+        #expect(ProcessIdentity.executablePath(of: 900_000) == nil)
+    }
+
+    @Test func findsProcessesByExecutablePathAndStartTime() throws {
+        let path = try #require(ProcessIdentity.executablePath(of: getpid()))
+
+        #expect(ProcessIdentity.pids(runningExecutableAt: path, startedNoEarlierThan: .distantPast).contains(getpid()))
+        #expect(ProcessIdentity.pids(
+            runningExecutableAt: path,
+            startedNoEarlierThan: Date().addingTimeInterval(3600)
+        ).isEmpty)
+        #expect(ProcessIdentity.pids(
+            runningExecutableAt: "/nowhere/kv-server",
+            startedNoEarlierThan: .distantPast
+        ).isEmpty)
     }
 }

@@ -1,23 +1,6 @@
 import Darwin
 import Foundation
 
-private final class ProbeAbandonment: @unchecked Sendable {
-    private let lock = NSLock()
-    private var raised = false
-
-    var isRaised: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return raised
-    }
-
-    func raise() {
-        lock.lock()
-        raised = true
-        lock.unlock()
-    }
-}
-
 actor ManagedServerController {
 
     private struct Child {
@@ -342,42 +325,11 @@ actor ManagedServerController {
         await probe(endpoint, ping: true, within: budget)
     }
 
-    // KVConnection deliberately has no read timeout, so a peer that accepts and never replies would
-    // park forever. Cancelling the connection from the timeout arm is what unparks it.
     private static func probe(_ endpoint: ConnectionEndpoint, ping: Bool, within budget: Duration) async -> Bool {
-        let connection = KVConnection()
-        let abandoned = ProbeAbandonment()
-        let answered = await withTaskGroup(of: Bool?.self) { group in
-            group.addTask {
-                guard (try? await connection.connect(to: endpoint)) != nil else { return false }
-                // The flag is raised before the disconnect, so a connection established after that
-                // disconnect still sees it and tears itself down.
-                guard !abandoned.isRaised else {
-                    await connection.disconnect()
-                    return false
-                }
-                guard ping else { return true }
-                return (try? await KVClient(connection: connection).ping()) != nil
-            }
-            group.addTask {
-                try? await Task.sleep(for: budget)
-                abandoned.raise()
-                await connection.disconnect()
-                return nil
-            }
-
-            var outcome: Bool?
-            while let next = await group.next() {
-                if let next {
-                    outcome = next
-                    break
-                }
-            }
-            group.cancelAll()
-            return outcome ?? false
+        let reached: Void? = try? await BoundedConnection.withConnection(to: endpoint, within: budget) { connection in
+            if ping { try await KVClient(connection: connection).ping() }
         }
-        await connection.disconnect()
-        return answered
+        return reached != nil
     }
 
     deinit {

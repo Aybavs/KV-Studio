@@ -3,30 +3,123 @@ import Foundation
 import Darwin
 @testable import KV_Studio
 
+// ManagedServerController.start() cannot be cancelled from the outside, so a gate that unparks
+// on cancellation would model something easier than the real thing.
+private final class StartLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        lock.lock()
+        isOpen = true
+        let parked = waiting
+        waiting = []
+        lock.unlock()
+        parked.forEach { $0.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if isOpen {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiting.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+}
+
 private actor StubManagedServer: ManagedServerHosting {
-    let served: ConnectionEndpoint?
-    private let pid: pid_t
-    private let failure: ManagedServerError?
+    private let handle: ManagedServerHandle
+    private let failure: (any Error)?
+    private let gate: StartLatch?
+    private let stopOutcome: ManagedServerStopOutcome
+    private let entered = Signal()
+    private var liveStarts = 0
+
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var maxConcurrentStarts = 0
 
-    init(pid: pid_t = 4_242, endpoint: ConnectionEndpoint? = nil, failure: ManagedServerError? = nil) {
-        self.pid = pid
-        self.served = endpoint
+    init(
+        pid: pid_t = 4_242,
+        endpoint: ConnectionEndpoint = ConnectionEndpoint(host: "127.0.0.1", port: 1),
+        failure: (any Error)? = nil,
+        gate: StartLatch? = nil,
+        stopOutcome: ManagedServerStopOutcome = .stopped
+    ) {
+        self.handle = ManagedServerHandle(pid: pid, endpoint: endpoint)
         self.failure = failure
+        self.gate = gate
+        self.stopOutcome = stopOutcome
     }
 
-    func start() async throws -> pid_t {
+    func start() async throws -> ManagedServerHandle {
         startCount += 1
+        liveStarts += 1
+        maxConcurrentStarts = max(maxConcurrentStarts, liveStarts)
+        entered.fire()
+        await Task.yield()
+        maxConcurrentStarts = max(maxConcurrentStarts, liveStarts)
+        if let gate { await gate.wait() }
+        liveStarts -= 1
         if let failure { throw failure }
-        return pid
+        return handle
     }
 
-    func stop() async {
+    // Models ManagedServerController.stop(), which cancels a live start from the inside.
+    func stop() async -> ManagedServerStopOutcome {
         stopCount += 1
+        gate?.open()
+        return stopOutcome
     }
 
-    var endpoint: ConnectionEndpoint? { served }
+    func waitUntilStarting() async {
+        await entered.wait()
+    }
+}
+
+private actor SecondLaneFails: ConnectionLaneOpening {
+    private(set) var opened: [KVConnection] = []
+
+    func open(to endpoint: ConnectionEndpoint) async throws -> KVConnection {
+        guard opened.isEmpty else { throw ConnectionError.connectFailed("second lane refused") }
+        let connection = KVConnection()
+        try await connection.connect(to: endpoint)
+        opened.append(connection)
+        return connection
+    }
+}
+
+// Samples on every published change instead of spinning: a busy loop on this actor starves
+// the wall-clock-bounded tests running beside it.
+@MainActor
+private final class InvariantWatch {
+    private(set) var violations = 0
+    private var armed = true
+
+    func watch(_ coordinator: ConnectionCoordinator) {
+        withObservationTracking {
+            _ = coordinator.phase
+            _ = coordinator.browser
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.armed else { return }
+                if case .connected = coordinator.phase, coordinator.browser == nil {
+                    self.violations += 1
+                }
+                self.watch(coordinator)
+            }
+        }
+    }
+
+    func stop() {
+        armed = false
+    }
 }
 
 @Suite(.timeLimit(.minutes(1)))
@@ -44,18 +137,24 @@ struct ConnectionCoordinatorTests {
     private func makeCoordinator(
         paths: ManagedPaths,
         server: any ManagedServerHosting = StubManagedServer(),
-        budget: Duration = .milliseconds(800)
+        budget: Duration = .milliseconds(800),
+        opener: any ConnectionLaneOpening = KVConnectionLaneOpener()
     ) -> ConnectionCoordinator {
         ConnectionCoordinator(
             paths: paths,
             server: server,
             probe: CompatibilityProbe(budget: budget),
-            inspector: PortConflictInspector(budget: budget)
+            inspector: PortConflictInspector(budget: budget),
+            opener: opener
         )
     }
 
-    private func compatibleServer() throws -> MultiFakeServer {
-        try MultiFakeServer { peer in FakeKV.serve(peer) }
+    private func compatibleServer() throws -> FakeServer {
+        try FakeServer(maxPeers: 8) { peer in FakeKV.serve(peer) }
+    }
+
+    private func session(_ endpoint: ConnectionEndpoint) -> ConnectionSession {
+        ConnectionSession(target: .existing(endpoint), endpoint: endpoint)
     }
 
     // MARK: - Existing targets
@@ -68,13 +167,9 @@ struct ConnectionCoordinatorTests {
 
         await coordinator.connect(to: .existing(server.endpoint))
 
-        #expect(coordinator.phase == .connected(
-            ConnectionSession(target: .existing(server.endpoint), endpoint: server.endpoint)
-        ))
-        let browser = try #require(coordinator.browser)
-        let console = try #require(coordinator.console)
-        try await browser.ping()
-        try await console.ping()
+        #expect(coordinator.phase == .connected(session(server.endpoint)))
+        try await #require(coordinator.browser).ping()
+        try await #require(coordinator.console).ping()
         #expect(coordinator.managedServer == .idle)
         #expect(PreferencesStore(paths: paths).loadLastConnectionTarget() == .existing(server.endpoint))
     }
@@ -82,7 +177,7 @@ struct ConnectionCoordinatorTests {
     @Test func serverThatFailsTheProbeIsRejectedWithItsOutcomeAndIsNotRemembered() async throws {
         let paths = try makePaths()
         let coordinator = makeCoordinator(paths: paths)
-        let hostile = try MultiFakeServer { peer in
+        let hostile = try FakeServer(maxPeers: 8) { peer in
             while let command = peer.readCommand() {
                 if FakeKV.name(of: command) == "DBSIZE" {
                     peer.write(Data("-ERR unknown command 'DBSIZE'\r\n".utf8))
@@ -107,26 +202,36 @@ struct ConnectionCoordinatorTests {
         #expect(PreferencesStore(paths: paths).loadLastConnectionTarget() == nil)
     }
 
+    // The step a silent peer stalls at depends on load, so this pins the pass-through, not the step.
     @Test func silentPeerIsSurfacedAsTheProbeReportedItWithoutExtraPrecision() async throws {
         let paths = try makePaths()
         let holder = try PortHolder()
         defer { holder.close() }
-        let budget = Duration.milliseconds(300)
+        let budget = Duration.milliseconds(500)
         let coordinator = makeCoordinator(paths: paths, budget: budget)
 
         await coordinator.connect(to: .existing(holder.endpoint))
 
-        #expect(coordinator.phase == .failed(ConnectionAttemptFailure(
-            target: .existing(holder.endpoint),
-            failure: .rejected(holder.endpoint, .unreachable(.timedOut(step: .ping, budget: budget)))
-        )))
+        guard case .failed(let attempt) = coordinator.phase else {
+            Issue.record("expected a failed attempt, got \(coordinator.phase)")
+            return
+        }
+        #expect(attempt.target == .existing(holder.endpoint))
+        #expect(attempt.failure == .rejected(
+            holder.endpoint,
+            .unreachable(.timedOut(step: .ping, budget: budget))
+        ) || attempt.failure == .rejected(
+            holder.endpoint,
+            .unreachable(.timedOut(step: nil, budget: budget))
+        ))
+        #expect(coordinator.browser == nil)
     }
 
     @Test func browserAndConsoleLanesRunIndependently() async throws {
         let paths = try makePaths()
         let held = Signal()
         let release = DispatchSemaphore(value: 0)
-        let server = try MultiFakeServer { peer in
+        let server = try FakeServer(maxPeers: 8) { peer in
             while let command = peer.readCommand() {
                 if command.contains(Data("hold".utf8)) {
                     held.fire()
@@ -169,11 +274,28 @@ struct ConnectionCoordinatorTests {
 
         await coordinator.connect(to: .existing(second.endpoint))
 
-        #expect(coordinator.phase == .connected(
-            ConnectionSession(target: .existing(second.endpoint), endpoint: second.endpoint)
-        ))
+        #expect(coordinator.phase == .connected(session(second.endpoint)))
         await #expect(throws: ConnectionError.notConnected) { try await abandoned.ping() }
         try await #require(coordinator.browser).ping()
+    }
+
+    @Test func aFailedSecondLaneLeavesTheFirstLaneClosed() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let opener = SecondLaneFails()
+        let coordinator = makeCoordinator(paths: paths, opener: opener)
+
+        await coordinator.connect(to: .existing(server.endpoint))
+
+        #expect(coordinator.phase == .failed(ConnectionAttemptFailure(
+            target: .existing(server.endpoint),
+            failure: .transport(server.endpoint, .connectFailed("second lane refused"))
+        )))
+        #expect(coordinator.browser == nil)
+        #expect(coordinator.console == nil)
+        let stranded = try #require(await opener.opened.first)
+        #expect(await stranded.isConnected == false)
     }
 
     // MARK: - Managed target
@@ -195,27 +317,14 @@ struct ConnectionCoordinatorTests {
         #expect(PreferencesStore(paths: paths).loadLastConnectionTarget() == .managedLocal)
     }
 
-    @Test func managedTargetWithoutAReportedEndpointFallsBackToThePreferredPort() async throws {
-        let paths = try makePaths()
-        let server = try compatibleServer()
-        defer { server.stop() }
-        try PreferencesStore(paths: paths).savePreferences(
-            Preferences(localBindHost: "127.0.0.1", localPort: server.port)
-        )
-        let coordinator = makeCoordinator(paths: paths, server: StubManagedServer(endpoint: nil))
-
-        await coordinator.connect(to: .managedLocal)
-
-        #expect(coordinator.phase == .connected(
-            ConnectionSession(target: .managedLocal, endpoint: server.endpoint)
-        ))
-    }
-
     @Test func portConflictSurfacesTheOccupantWithoutConnectingToIt() async throws {
         let paths = try makePaths()
         let occupant = try compatibleServer()
         defer { occupant.stop() }
-        let host = StubManagedServer(endpoint: occupant.endpoint, failure: .portInUse(occupant.endpoint))
+        let host = StubManagedServer(
+            endpoint: occupant.endpoint,
+            failure: ManagedServerError.portInUse(occupant.endpoint)
+        )
         let coordinator = makeCoordinator(paths: paths, server: host)
 
         await coordinator.connect(to: .managedLocal)
@@ -232,7 +341,7 @@ struct ConnectionCoordinatorTests {
 
     @Test func managedStartFailureIsSurfacedAsIs() async throws {
         let paths = try makePaths()
-        let host = StubManagedServer(failure: .binaryUnavailable(["/nowhere"]))
+        let host = StubManagedServer(failure: ManagedServerError.binaryUnavailable(["/nowhere"]))
         let coordinator = makeCoordinator(paths: paths, server: host)
 
         await coordinator.connect(to: .managedLocal)
@@ -244,7 +353,21 @@ struct ConnectionCoordinatorTests {
         #expect(coordinator.managedServer == .failed(.binaryUnavailable(["/nowhere"])))
     }
 
-    // MARK: - Restore
+    @Test func anInterruptedStartPublishesAFailureRatherThanSpinning() async throws {
+        let paths = try makePaths()
+        let host = StubManagedServer(failure: CancellationError())
+        let coordinator = makeCoordinator(paths: paths, server: host)
+
+        await coordinator.connect(to: .managedLocal)
+
+        #expect(coordinator.phase == .failed(ConnectionAttemptFailure(
+            target: .managedLocal,
+            failure: .interrupted
+        )))
+        #expect(coordinator.managedServer == .idle)
+    }
+
+    // MARK: - Restore and reconnect
 
     @Test func restoringReconnectsTheSavedTarget() async throws {
         let paths = try makePaths()
@@ -255,9 +378,7 @@ struct ConnectionCoordinatorTests {
 
         await coordinator.restoreLastConnection()
 
-        #expect(coordinator.phase == .connected(
-            ConnectionSession(target: .existing(server.endpoint), endpoint: server.endpoint)
-        ))
+        #expect(coordinator.phase == .connected(session(server.endpoint)))
     }
 
     @Test func restoringWithNothingSavedTouchesNothing() async throws {
@@ -283,13 +404,100 @@ struct ConnectionCoordinatorTests {
         let first = try #require(coordinator.browser)
         await coordinator.reconnect()
 
-        #expect(coordinator.phase == .connected(
-            ConnectionSession(target: .existing(server.endpoint), endpoint: server.endpoint)
-        ))
+        #expect(coordinator.phase == .connected(session(server.endpoint)))
         await #expect(throws: ConnectionError.notConnected) { try await first.ping() }
     }
 
-    // MARK: - Teardown
+    @Test func reportingALostConnectionDemotesTheConnectedPhaseAndFreesTheLanes() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let coordinator = makeCoordinator(paths: paths)
+
+        await coordinator.connect(to: .existing(server.endpoint))
+        let browser = try #require(coordinator.browser)
+        await coordinator.reportConnectionLost(.connectionClosed)
+
+        #expect(coordinator.phase == .failed(ConnectionAttemptFailure(
+            target: .existing(server.endpoint),
+            failure: .transport(server.endpoint, .connectionClosed)
+        )))
+        #expect(coordinator.browser == nil)
+        #expect(coordinator.console == nil)
+        await #expect(throws: ConnectionError.notConnected) { try await browser.ping() }
+
+        await coordinator.reconnect()
+        #expect(coordinator.phase == .connected(session(server.endpoint)))
+    }
+
+    // MARK: - Overlap, cancellation and teardown
+
+    @Test func overlappingConnectsNeverRunTwoAttemptsAtOnce() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let gate = StartLatch()
+        let host = StubManagedServer(endpoint: server.endpoint, gate: gate)
+        let coordinator = makeCoordinator(paths: paths, server: host)
+
+        let first = Task { await coordinator.connect(to: .managedLocal) }
+        await host.waitUntilStarting()
+        let second = Task { await coordinator.connect(to: .managedLocal) }
+        let third = Task { await coordinator.connect(to: .managedLocal) }
+        for _ in 0..<4 { await Task.yield() }
+        gate.open()
+        await first.value
+        await second.value
+        await third.value
+
+        #expect(await host.maxConcurrentStarts == 1)
+        #expect(coordinator.phase == .connected(
+            ConnectionSession(target: .managedLocal, endpoint: server.endpoint)
+        ))
+        try await #require(coordinator.browser).ping()
+    }
+
+    @Test func phaseNeverClaimsConnectedWithoutLanesWhileSwitchingOrTearingDown() async throws {
+        let paths = try makePaths()
+        let first = try compatibleServer()
+        defer { first.stop() }
+        let second = try compatibleServer()
+        defer { second.stop() }
+        let coordinator = makeCoordinator(paths: paths)
+        await coordinator.connect(to: .existing(first.endpoint))
+
+        let watch = InvariantWatch()
+        watch.watch(coordinator)
+
+        await coordinator.connect(to: .existing(second.endpoint))
+        await coordinator.shutDown()
+        watch.stop()
+
+        #expect(watch.violations == 0)
+        #expect(coordinator.phase == .disconnected)
+    }
+
+    @Test func shuttingDownDuringAStartDoesNotWaitForTheStartToFinish() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let gate = StartLatch()
+        let host = StubManagedServer(endpoint: server.endpoint, gate: gate)
+        let coordinator = makeCoordinator(paths: paths, server: host)
+
+        let connecting = Task { await coordinator.connect(to: .managedLocal) }
+        await host.waitUntilStarting()
+
+        // Deadlocks until the time limit if teardown waits out a start only stop() can end.
+        await coordinator.shutDown()
+        await connecting.value
+
+        #expect(coordinator.phase == .disconnected)
+        #expect(coordinator.browser == nil)
+        #expect(coordinator.console == nil)
+        #expect(await host.stopCount == 1)
+        #expect(server.acceptedCount == 0)
+    }
 
     @Test func shuttingDownClosesBothLanesAndStopsTheServerItStarted() async throws {
         let paths = try makePaths()
@@ -313,6 +521,20 @@ struct ConnectionCoordinatorTests {
         #expect(coordinator.managedServer == .stopped)
     }
 
+    @Test func aStopThatLeavesALiveProcessIsSurfacedAsUnreclaimed() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let host = StubManagedServer(endpoint: server.endpoint, stopOutcome: .unreclaimed(777))
+        let coordinator = makeCoordinator(paths: paths, server: host)
+
+        await coordinator.connect(to: .managedLocal)
+        await coordinator.shutDown()
+
+        #expect(coordinator.managedServer == .unreclaimed(777))
+        #expect(coordinator.phase == .disconnected)
+    }
+
     @Test func shuttingDownLeavesAServerThisCoordinatorNeverStartedAlone() async throws {
         let paths = try makePaths()
         let server = try compatibleServer()
@@ -328,41 +550,48 @@ struct ConnectionCoordinatorTests {
         #expect(coordinator.phase == .disconnected)
     }
 
-    @Test func aStopThatLeavesALiveRecordIsSurfacedAsUnreclaimedRatherThanStopped() async throws {
+    @Test func shuttingDownFromAFailedAttemptIsQuiet() async throws {
         let paths = try makePaths()
-        let fixtures = try ProcessFixtures()
-        defer { fixtures.remove() }
-        let script = try await fixtures.launchableScript(named: "survivor", body: FixtureScript.sleepsForever)
-        let survivor = Process()
-        survivor.executableURL = script
-        survivor.standardOutput = FileHandle.nullDevice
-        survivor.standardError = FileHandle.nullDevice
-        try survivor.run()
-        defer {
-            kill(survivor.processIdentifier, SIGKILL)
-            survivor.waitUntilExit()
-        }
-        try await fixtures.waitUntilReady(script)
+        let holder = try PortHolder()
+        defer { holder.close() }
+        let host = StubManagedServer()
+        let coordinator = makeCoordinator(paths: paths, server: host, budget: .milliseconds(200))
 
-        let pid = survivor.processIdentifier
-        let identity = try #require(ProcessIdentity.startTime(of: pid))
-        let server = try compatibleServer()
-        defer { server.stop() }
-        try ManagedServerRecordStore(paths: paths).save(ManagedServerRecord(
-            pid: pid,
-            host: "127.0.0.1",
-            port: server.port,
-            binaryPath: script.path,
-            processStartTime: identity,
-            startedAt: Date()
-        ))
-        let host = StubManagedServer(pid: pid, endpoint: server.endpoint)
-        let coordinator = makeCoordinator(paths: paths, server: host)
-
-        await coordinator.connect(to: .managedLocal)
+        await coordinator.connect(to: .existing(holder.endpoint))
         await coordinator.shutDown()
 
-        #expect(coordinator.managedServer == .unreclaimed(pid))
         #expect(coordinator.phase == .disconnected)
+        #expect(await host.stopCount == 0)
+    }
+
+    @Test func connectingAfterShutDownIsRefused() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let host = StubManagedServer(endpoint: server.endpoint)
+        let coordinator = makeCoordinator(paths: paths, server: host)
+
+        await coordinator.shutDown()
+        await coordinator.connect(to: .managedLocal)
+
+        #expect(coordinator.phase == .disconnected)
+        #expect(coordinator.browser == nil)
+        #expect(await host.startCount == 0)
+        #expect(server.acceptedCount == 0)
+    }
+
+    @Test func cancellingTheDrivingTaskStillLeavesPhaseAndLanesAgreeing() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let coordinator = makeCoordinator(paths: paths)
+
+        let driver = Task { await coordinator.connect(to: .existing(server.endpoint)) }
+        driver.cancel()
+        await driver.value
+
+        #expect(coordinator.phase == .connected(session(server.endpoint)))
+        try await #require(coordinator.browser).ping()
+        try await #require(coordinator.console).ping()
     }
 }

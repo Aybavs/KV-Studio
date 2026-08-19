@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+@testable import KV_Studio
 
 // MARK: - Loopback fake server
 
@@ -153,19 +154,22 @@ final class FakePeer: @unchecked Sendable {
 final class FakeServer: @unchecked Sendable {
     let port: UInt16
     private let acceptSource: DispatchSourceRead
+    private let ledger = PeerLedger()
 
-    init(label: String = #function, handler: @escaping @Sendable (FakePeer) -> Void) throws {
+    // The coordinator opens a probe connection and one connection per lane, so a server that
+    // stops accepting after its first peer cannot stand in for a real one.
+    init(label: String = #function, maxPeers: Int = 1, handler: @escaping @Sendable (FakePeer) -> Void) throws {
         let bound = try boundLoopbackSocket(backlog: 8)
         let descriptor = bound.descriptor
         port = bound.port
 
         // A readable-source accept never blocks a thread, so `stop()` is deterministic.
-        let work = DispatchQueue(label: "fake-server.work.\(label)")
         let source = DispatchSource.makeReadSource(
             fileDescriptor: descriptor,
             queue: DispatchQueue(label: "fake-server.accept.\(label)")
         )
         acceptSource = source
+        let ledger = ledger
         source.setEventHandler {
             let accepted = accept(descriptor, nil, nil)
             guard accepted >= 0 else {
@@ -173,11 +177,13 @@ final class FakeServer: @unchecked Sendable {
                 source.cancel()
                 return
             }
-            source.cancel()
             var noDelay: Int32 = 1
             setsockopt(accepted, Int32(IPPROTO_TCP), TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
             let peer = FakePeer(descriptor: accepted)
-            work.async {
+            let count = ledger.track(peer)
+            if count >= maxPeers { source.cancel() }
+            // Each peer gets its own queue: one parked mid-command must not stall the others.
+            DispatchQueue(label: "fake-server.peer.\(label).\(count)").async {
                 handler(peer)
                 peer.finish()
             }
@@ -186,8 +192,42 @@ final class FakeServer: @unchecked Sendable {
         source.resume()
     }
 
+    var endpoint: ConnectionEndpoint { ConnectionEndpoint(host: "127.0.0.1", port: port) }
+
+    var acceptedCount: Int { ledger.accepted }
+
     func stop() {
         acceptSource.cancel()
+        ledger.closeAll()
+    }
+}
+
+private final class PeerLedger: @unchecked Sendable {
+    private let lock = NSLock()
+    private var peers: [FakePeer] = []
+    private var count = 0
+
+    var accepted: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func track(_ peer: FakePeer) -> Int {
+        lock.lock()
+        peers.append(peer)
+        count += 1
+        let current = count
+        lock.unlock()
+        return current
+    }
+
+    func closeAll() {
+        lock.lock()
+        let open = peers
+        peers = []
+        lock.unlock()
+        open.forEach { $0.close() }
     }
 }
 

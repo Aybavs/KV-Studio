@@ -12,6 +12,7 @@ enum ConnectionFailure: Equatable, Sendable {
     case portConflict(PortOccupancy)
     case managedServer(ManagedServerError)
     case transport(ConnectionEndpoint, ConnectionError)
+    case interrupted
 }
 
 struct ConnectionAttemptFailure: Equatable, Sendable {
@@ -37,10 +38,29 @@ enum ManagedServerStatus: Equatable, Sendable {
     case failed(ManagedServerError)
 }
 
-protocol ManagedServerHosting: Sendable {
-    func start() async throws -> pid_t
-    func stop() async
-    var endpoint: ConnectionEndpoint? { get async }
+struct ManagedServerHandle: Equatable, Sendable {
+    let pid: pid_t
+    let endpoint: ConnectionEndpoint
 }
 
-extension ManagedServerController: ManagedServerHosting {}
+enum ManagedServerStopOutcome: Equatable, Sendable {
+    case stopped
+    case unreclaimed(pid_t)
+}
+
+protocol ManagedServerHosting: Sendable {
+    func start() async throws -> ManagedServerHandle
+    func stop() async -> ManagedServerStopOutcome
+}
+
+protocol ConnectionLaneOpening: Sendable {
+    func open(to endpoint: ConnectionEndpoint) async throws -> KVConnection
+}
+
+struct KVConnectionLaneOpener: ConnectionLaneOpening {
+    func open(to endpoint: ConnectionEndpoint) async throws -> KVConnection {
+        let connection = KVConnection()
+        try await connection.connect(to: endpoint)
+        return connection
+    }
+}

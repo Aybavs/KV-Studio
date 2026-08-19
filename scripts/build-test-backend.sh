@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 # git-common-dir collapses worktree nesting, so the default resolves correctly from any worktree.
 MAIN_REPO_ROOT="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
-DEFAULT_SRC="$MAIN_REPO_ROOT/../go-kv-store/.worktrees/v1.1.0"
+DEFAULT_SRC="$MAIN_REPO_ROOT/../go-kv-store"
 
 GO_KV_STORE_SRC="${GO_KV_STORE_SRC:-$DEFAULT_SRC}"
 DEST="$REPO_ROOT/.build/kv-server"

@@ -1,6 +1,23 @@
 import Darwin
 import Foundation
 
+private final class ProbeAbandonment: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised = false
+
+    var isRaised: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return raised
+    }
+
+    func raise() {
+        lock.lock()
+        raised = true
+        lock.unlock()
+    }
+}
+
 actor ManagedServerController {
 
     private struct Child {
@@ -159,6 +176,7 @@ actor ManagedServerController {
             runningExecutableAt: record.binaryPath,
             startedNoEarlierThan: record.startedAt
         )
+        guard !candidates.isEmpty else { return }
         guard candidates.count == 1, let pid = candidates.first,
               let identity = ProcessIdentity.startTime(of: pid) else {
             throw ManagedServerError.unreclaimedServer(record.endpoint)
@@ -285,7 +303,6 @@ actor ManagedServerController {
     private func discardChild() async -> ManagedServerTerminationOutcome {
         guard let child else {
             await closeOutput()
-            records.clear()
             return .notRunning
         }
 
@@ -329,14 +346,22 @@ actor ManagedServerController {
     // park forever. Cancelling the connection from the timeout arm is what unparks it.
     private static func probe(_ endpoint: ConnectionEndpoint, ping: Bool, within budget: Duration) async -> Bool {
         let connection = KVConnection()
+        let abandoned = ProbeAbandonment()
         let answered = await withTaskGroup(of: Bool?.self) { group in
             group.addTask {
                 guard (try? await connection.connect(to: endpoint)) != nil else { return false }
+                // The flag is raised before the disconnect, so a connection established after that
+                // disconnect still sees it and tears itself down.
+                guard !abandoned.isRaised else {
+                    await connection.disconnect()
+                    return false
+                }
                 guard ping else { return true }
                 return (try? await KVClient(connection: connection).ping()) != nil
             }
             group.addTask {
                 try? await Task.sleep(for: budget)
+                abandoned.raise()
                 await connection.disconnect()
                 return nil
             }

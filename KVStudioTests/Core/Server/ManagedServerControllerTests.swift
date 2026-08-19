@@ -479,7 +479,7 @@ struct ManagedServerControllerTests {
         #expect(store.load() == nil)
     }
 
-    @Test func refusesToSignalAnUnmatchedIntentRecord() async throws {
+    @Test func reportsAStrangersPortWhenAnIntentRecordMatchesNoProcessOfOurs() async throws {
         let paths = try makePaths()
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let fixtures = try ProcessFixtures()
@@ -497,12 +497,14 @@ struct ManagedServerControllerTests {
             )
         )
 
-        let controller = ManagedServerController(paths: paths, resolver: resolver(nil), timeouts: timeouts)
+        let script = try await fixtures.launchableScript(named: "kv-server", body: FixtureScript.sleepsForever)
+        let controller = ManagedServerController(paths: paths, resolver: resolver(script), timeouts: timeouts)
         let error = await #expect(throws: ManagedServerError.self) { try await controller.start() }
 
-        #expect(error == .unreclaimedServer(holder.endpoint))
+        #expect(error == .portInUse(holder.endpoint))
         #expect(holder.isStillListening)
-        #expect(try #require(store.load()).isIntent)
+        #expect(!FileManager.default.fileExists(atPath: script.path + ".pid"))
+        #expect(store.load() == nil)
     }
 
     // Releasing the controller must not release its server.
@@ -583,6 +585,42 @@ struct ManagedServerControllerTests {
             return
         }
         #expect(message.contains(String(pid)))
+        #expect(try #require(store.load()).pid == pid)
+    }
+
+    @Test func stopKeepsARecordThisControllerNeverTookOwnershipOf() async throws {
+        let paths = try makePaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+
+        let script = try await fixtures.launchableScript(named: "stubborn", body: FixtureScript.ignoresTermination)
+        let stubborn = Process()
+        stubborn.executableURL = script
+        stubborn.standardOutput = FileHandle.nullDevice
+        stubborn.standardError = FileHandle.nullDevice
+        try stubborn.run()
+        let pid = stubborn.processIdentifier
+        defer { kill(pid, SIGKILL) }
+        try await fixtures.waitUntilReady(script)
+        let identity = try #require(ProcessIdentity.startTime(of: pid))
+
+        let port = try KVServerProcess.allocatePort()
+        try usePort(port, in: paths)
+        let store = ManagedServerRecordStore(paths: paths)
+        try store.save(record(pid: pid, identity: identity, port: port))
+
+        var impatient = timeouts
+        impatient.gracefulShutdown = .zero
+        impatient.forcedShutdown = .zero
+        let controller = ManagedServerController(paths: paths, resolver: resolver(nil), timeouts: impatient)
+
+        let error = await #expect(throws: ManagedServerError.self) { try await controller.start() }
+        #expect(error == .terminationFailed(pid))
+        #expect(try #require(store.load()).pid == pid)
+
+        await controller.stop()
+
         #expect(try #require(store.load()).pid == pid)
     }
 

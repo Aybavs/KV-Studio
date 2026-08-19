@@ -141,7 +141,7 @@ final class KVServerProcess: @unchecked Sendable {
         kill(process.processIdentifier, SIGKILL)
     }
 
-    private static func allocatePort() throws -> UInt16 {
+    static func allocatePort() throws -> UInt16 {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw KVServerProcessError.portAllocationFailed }
         defer { close(descriptor) }

@@ -12,6 +12,7 @@ final class ConnectionCoordinator {
     private(set) var browser: KVClient?
     private(set) var console: KVClient?
 
+    @ObservationIgnored let paths: ManagedPaths
     @ObservationIgnored private let preferences: PreferencesStore
     @ObservationIgnored private let server: any ManagedServerHosting
     @ObservationIgnored private let probe: CompatibilityProbe
@@ -32,6 +33,7 @@ final class ConnectionCoordinator {
         inspector: PortConflictInspector = PortConflictInspector(),
         opener: any ConnectionLaneOpening = KVConnectionLaneOpener()
     ) {
+        self.paths = paths
         self.preferences = PreferencesStore(paths: paths)
         self.server = server
         self.probe = probe
@@ -84,6 +86,22 @@ final class ConnectionCoordinator {
         let stopping = ownsManagedServer ? beginStop() : nil
 
         await cancelAttempt()
+        phase = .disconnected
+        await closeLanes()
+
+        guard let stopping else { return }
+        let outcome = await stopping.value
+        ownsManagedServer = false
+        managedServer = Self.status(for: outcome)
+    }
+
+    func disconnect() async {
+        guard !isShuttingDown else { return }
+        let stopping = ownsManagedServer ? beginStop() : nil
+
+        await cancelAttempt()
+        guard !isShuttingDown else { return }
+
         phase = .disconnected
         await closeLanes()
 

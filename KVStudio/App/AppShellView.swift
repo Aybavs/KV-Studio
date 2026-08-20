@@ -57,7 +57,7 @@ struct AppShellView: View {
         switch selection {
         case .browser:
             if isConnected {
-                BrowserPlaceholderView()
+                BrowserView(coordinator: coordinator)
             } else {
                 ConnectionOnboardingView(coordinator: coordinator, selection: $selection)
             }
@@ -71,7 +71,7 @@ struct AppShellView: View {
             SettingsPlaceholderView()
         case .none:
             if isConnected {
-                BrowserPlaceholderView()
+                BrowserView(coordinator: coordinator)
             } else {
                 ConnectionOnboardingView(coordinator: coordinator, selection: $selection)
             }

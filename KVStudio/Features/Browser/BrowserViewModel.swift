@@ -13,6 +13,9 @@ enum BrowserState: Equatable, Sendable {
 @MainActor
 @Observable
 final class BrowserViewModel {
+    static let scanCount = 500
+    static let prefetchThreshold = 30
+
     private(set) var keys: [Data] = []
     private(set) var cursor: UInt64 = 0
     private(set) var generation: UInt64 = 0
@@ -44,6 +47,12 @@ final class BrowserViewModel {
             escaped.append(ch)
         }
         return Data("*\(escaped)*".utf8)
+    }
+
+    func shouldLoadMore(at index: Int) -> Bool {
+        guard state == .loaded, !endReached, cursor != 0 else { return false }
+        guard !keys.isEmpty else { return false }
+        return index >= max(0, keys.count - Self.prefetchThreshold)
     }
 
     @discardableResult
@@ -91,9 +100,21 @@ final class BrowserViewModel {
     func apply(page: ScanPage, generation: UInt64) {
         guard generation == self.generation else { return }
         if state == .loadingMore {
-            keys.append(contentsOf: page.keys)
+            var seen = Set(keys)
+            var unique: [Data] = []
+            unique.reserveCapacity(page.keys.count)
+            for k in page.keys where seen.insert(k).inserted {
+                unique.append(k)
+            }
+            keys.append(contentsOf: unique)
         } else {
-            keys = page.keys
+            var seen = Set<Data>()
+            var unique: [Data] = []
+            unique.reserveCapacity(page.keys.count)
+            for k in page.keys where seen.insert(k).inserted {
+                unique.append(k)
+            }
+            keys = unique
         }
         cursor = page.nextCursor
         endReached = page.nextCursor == 0
@@ -168,13 +189,13 @@ final class BrowserViewModel {
         errorMessage = nil
     }
 
-    func loadInitial(using client: KVClient, count: Int = 500) async {
+    func loadInitial(using client: KVClient, count: Int = scanCount) async {
         let gen = prepareInitialLoad()
         await performScan(cursor: 0, generation: gen, client: client, count: count, isRetry: false)
         await refreshDBSize(using: client)
     }
 
-    func loadMore(using client: KVClient, count: Int = 500) async {
+    func loadMore(using client: KVClient, count: Int = scanCount) async {
         guard let gen = prepareLoadMore() else { return }
         let cur = cursor
         let pattern = matchPattern()
@@ -191,13 +212,13 @@ final class BrowserViewModel {
         }
     }
 
-    func refresh(using client: KVClient, count: Int = 500) async {
+    func refresh(using client: KVClient, count: Int = scanCount) async {
         let gen = prepareRefresh()
         await performScan(cursor: 0, generation: gen, client: client, count: count, isRetry: false)
         await refreshDBSize(using: client)
     }
 
-    func applySearch(_ text: String, using client: KVClient, count: Int = 500) async {
+    func applySearch(_ text: String, using client: KVClient, count: Int = scanCount) async {
         guard let gen = updateSearchText(text) else { return }
         await performScan(cursor: 0, generation: gen, client: client, count: count, isRetry: false)
         await refreshDBSize(using: client)

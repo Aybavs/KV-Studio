@@ -8,14 +8,15 @@ struct KVStudioApp: App {
     @State private var settings: SettingsViewModel
     @State private var updater: SparkleAppUpdater
     @State private var updates: UpdateCoordinator
+    @State private var storageFailure: UserFacingError?
 
     init() {
-        let paths: ManagedPaths
-        do {
-            paths = try ManagedPaths.resolveDefault()
-        } catch {
-            fatalError("KV Studio requires Application Support directory: \(error)")
-        }
+        let resolved = Result { try ManagedPaths.resolveDefault() }
+        // Falling back silently would put the user's data somewhere purgeable, so the app instead
+        // opens on an explanation it can actually read.
+        let paths = (try? resolved.get())
+            ?? ManagedPaths(root: FileManager.default.temporaryDirectory.appendingPathComponent("KV Studio", isDirectory: true))
+        _storageFailure = State(initialValue: resolved.failureError.map(UserFacingError.describing))
         // One host for the whole app: the connection coordinator and the activator must never
         // drive two different managed servers.
         let host = ManagedServerHost(paths: paths)
@@ -34,7 +35,13 @@ struct KVStudioApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppShellView(coordinator: coordinator, settings: settings)
+            Group {
+                if let storageFailure {
+                    UnavailableStorageView(error: storageFailure)
+                } else {
+                    AppShellView(coordinator: coordinator, settings: settings)
+                }
+            }
                 .preferredColorScheme(settings.appearance.colorScheme)
                 .sheet(isPresented: Binding(
                     get: { updater.presenter.phase.isPresentable },

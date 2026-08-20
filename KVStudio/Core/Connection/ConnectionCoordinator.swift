@@ -6,6 +6,7 @@ import Observation
 final class ConnectionCoordinator {
 
     private(set) var phase: ConnectionPhase = .disconnected
+    private(set) var lastSaveFailure: UserFacingError?
     private(set) var managedServer: ManagedServerStatus = .idle
     // Two connections, not one: KVConnection serializes commands, so a Browser traversal
     // would otherwise sit in front of every Console command.
@@ -148,7 +149,12 @@ final class ConnectionCoordinator {
             await closeLanes()
             return
         }
-        try? preferences.saveLastConnectionTarget(target)
+        do {
+            try preferences.saveLastConnectionTarget(target)
+        } catch {
+            // Not fatal: the connection is live, only the "reopen last" memory is lost.
+            lastSaveFailure = UserFacingError.describing(error)
+        }
         publish(.connected(ConnectionSession(target: target, endpoint: endpoint)))
     }
 
@@ -267,6 +273,6 @@ final class ConnectionCoordinator {
     }
 
     private static func connectionError(_ error: any Error) -> ConnectionError {
-        (error as? ConnectionError) ?? .connectFailed(String(describing: error))
+        (error as? ConnectionError) ?? .connectFailed(UserFacingError.describing(error).message)
     }
 }

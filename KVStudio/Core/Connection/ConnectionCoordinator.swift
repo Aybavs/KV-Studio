@@ -181,6 +181,7 @@ final class ConnectionCoordinator {
         do {
             handle = try await server.start()
         } catch let error as ManagedServerError {
+            guard isLive else { return nil }
             managedServer = .failed(error)
             publish(.failed(ConnectionAttemptFailure(
                 target: .managedLocal,
@@ -188,6 +189,7 @@ final class ConnectionCoordinator {
             )))
             return nil
         } catch {
+            guard isLive else { return nil }
             managedServer = .idle
             publish(.failed(ConnectionAttemptFailure(target: .managedLocal, failure: .interrupted)))
             return nil

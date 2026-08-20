@@ -15,7 +15,7 @@ func toolbarTitle(for phase: ConnectionPhase) -> String {
         switch attempt.failure {
         case .rejected(_, let outcome):
             switch outcome {
-            case .compatible: return "Incompatible server"
+            case .compatible: return "Server rejected"
             case .unreachable: return "Server unreachable"
             case .incompatible: return "Incompatible server"
             case .protocolFailure: return "Protocol error"

@@ -29,7 +29,7 @@ struct KVStudioApp: App {
                     await coordinator.restoreLastConnection()
                 }
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .defaultSize(width: 1_000, height: 640)
     }
 }

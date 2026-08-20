@@ -29,7 +29,7 @@ struct SidebarHeaderState: Equatable, Sendable {
                 self.title = "Local Server"
                 self.subtitle = "Running"
                 self.isHealthy = false
-            default:
+            case .idle, .stopped:
                 self.title = "Disconnected"
                 self.subtitle = "Not connected"
                 self.isHealthy = false

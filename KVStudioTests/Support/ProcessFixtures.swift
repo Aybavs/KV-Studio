@@ -96,9 +96,21 @@ enum ProcessFixtureError: Error {
 enum FixtureScript {
     private static let announceReady = "printf %s \"$$\" > \"$0.pid\"\n: > \"$0.ready\"\n"
 
-    static let sleepsForever = announceReady + "while true; do sleep 0.2; done\n"
+    // A killed test run cannot run `defer`, so the fixture has to end itself: it quits once
+    // reparented to launchd, and caps its own lifetime far beyond any test's.
+    private static let waitsUntilOrphanedOrCapped = """
+    i=0
+    while [ "$i" -lt 600 ]; do
+      sleep 1
+      if [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "1" ]; then exit 0; fi
+      i=$((i + 1))
+    done
 
-    static let ignoresTermination = "trap '' TERM\n" + announceReady + "while true; do sleep 0.2; done\n"
+    """
+
+    static let sleepsForever = announceReady + waitsUntilOrphanedOrCapped
+
+    static let ignoresTermination = "trap '' TERM\n" + announceReady + waitsUntilOrphanedOrCapped
 
     static let recordsArguments = "printf '%s\\n' \"$@\" > \"$0.args\"\n" + sleepsForever
 

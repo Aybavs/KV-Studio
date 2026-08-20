@@ -62,7 +62,7 @@ struct AppShellView: View {
                 ConnectionOnboardingView(coordinator: coordinator, selection: $selection)
             }
         case .console:
-            ConsolePlaceholderView()
+            ConsoleView(coordinator: coordinator)
         case .server:
             ServerPlaceholderView()
         case .logs:

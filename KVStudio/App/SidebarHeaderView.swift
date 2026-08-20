@@ -24,6 +24,8 @@ struct SidebarHeaderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("KV Studio")
+        .accessibilityValue("\(state.title), \(state.subtitle)")
     }
 }

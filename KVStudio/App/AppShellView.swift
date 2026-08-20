@@ -95,6 +95,9 @@ struct AppShellView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Connection status")
+            .accessibilityValue(currentToolbarTitle)
             .accessibilityIdentifier("toolbar.status")
         }
     }

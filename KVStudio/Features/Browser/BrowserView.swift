@@ -415,6 +415,9 @@ struct BrowserView: View {
                     .onTapGesture { viewModel.select(key) }
                     .listRowBackground(viewModel.selection == key ? Color.accentColor.opacity(0.12) : Color.clear)
                     .contextMenu {
+                        Button("Copy Key") { Pasteboard.copy(key) }
+                            .accessibilityIdentifier("browser.row.copyKey")
+                        Divider()
                         Button("Delete", role: .destructive) { pendingDeleteKey = key }
                             .accessibilityIdentifier("browser.row.delete.\(BrowserViewModel.deletePreview(for: key))")
                     }
@@ -480,6 +483,7 @@ private struct BrowserKeyRow: View {
             Image(systemName: "key.fill")
                 .foregroundStyle(.secondary)
                 .font(.caption)
+                .accessibilityHidden(true)
             Text(displayString(for: key))
                 .font(.system(.body, design: .monospaced))
                 .lineLimit(1)
@@ -489,9 +493,13 @@ private struct BrowserKeyRow: View {
                 Image(systemName: "checkmark")
                     .foregroundStyle(Color.accentColor)
                     .font(.caption.weight(.bold))
+                    .accessibilityHidden(true)
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(AccessibilityLabels.key(key))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("browser.row.\(displayString(for: key))")
     }
 

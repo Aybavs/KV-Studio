@@ -15,6 +15,15 @@ enum ConsoleRESPFormatting {
 }
 
 struct RESPValueView: View {
+    private func copyable(_ text: String) -> some View {
+        Text(text)
+            .textSelection(.enabled)
+            .contextMenu {
+                Button("Copy Response") { Pasteboard.copy(text) }
+                    .accessibilityIdentifier("console.copyResponse")
+            }
+    }
+
     let value: RESPValue
 
     var body: some View {

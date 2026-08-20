@@ -45,6 +45,10 @@ struct BrowserView: View {
                 Task { await viewModel.loadInitial(using: client, count: BrowserViewModel.scanCount) }
             }
         }
+        .onChange(of: viewModel.selection) { _, newKey in
+            guard let key = newKey, let client = coordinator.browser else { return }
+            Task { await viewModel.loadDetail(for: key, using: client) }
+        }
         .accessibilityIdentifier("browser.view")
     }
 
@@ -114,8 +118,18 @@ struct BrowserView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("browser.empty")
             } else {
-                list
+                browserContent
             }
+        }
+    }
+
+    private var browserContent: some View {
+        HStack(spacing: 0) {
+            list
+                .frame(minWidth: 220, idealWidth: 320, maxWidth: .infinity)
+            Divider()
+            BrowserDetailView(state: viewModel.detailState)
+                .frame(minWidth: 220, idealWidth: 360, maxWidth: .infinity)
         }
     }
 

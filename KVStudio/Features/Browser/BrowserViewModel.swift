@@ -25,6 +25,8 @@ final class BrowserViewModel {
     private(set) var dbsize: Int = 0
     private(set) var state: BrowserState = .idle
     private(set) var errorMessage: String?
+    private(set) var detailState: BrowserDetailState = .idle
+    private(set) var detailGeneration: UInt64 = 0
 
     var nextCursor: UInt64 { cursor }
 
@@ -81,6 +83,8 @@ final class BrowserViewModel {
         selection = nil
         state = .initialLoading
         errorMessage = nil
+        detailState = .idle
+        detailGeneration &+= 1
         return generation
     }
 
@@ -109,6 +113,8 @@ final class BrowserViewModel {
         errorMessage = nil
         if let sel = selection, !keys.contains(sel) {
             selection = nil
+            detailState = .idle
+            detailGeneration &+= 1
         }
     }
 
@@ -162,6 +168,10 @@ final class BrowserViewModel {
 
     func select(_ key: Data?) {
         selection = key
+        if key == nil {
+            detailState = .idle
+            detailGeneration &+= 1
+        }
     }
 
     func reset() {
@@ -174,6 +184,8 @@ final class BrowserViewModel {
         dbsize = 0
         state = .idle
         errorMessage = nil
+        detailState = .idle
+        detailGeneration = 0
     }
 
     func loadInitial(using client: KVClient, count: Int = scanCount) async {
@@ -236,6 +248,49 @@ final class BrowserViewModel {
             dbsize = size
         } catch {
             return
+        }
+    }
+
+    // MARK: - Detail
+
+    @discardableResult
+    func prepareDetailLoad(for key: Data) -> UInt64 {
+        detailGeneration &+= 1
+        detailState = .loading(key: key)
+        return detailGeneration
+    }
+
+    func applyDetail(value: Data?, ttl: TTLState, key: Data, generation: UInt64) {
+        guard generation == detailGeneration else { return }
+        if let value {
+            detailState = .loaded(key: key, value: value, ttl: ttl)
+        } else {
+            detailState = .missing(key: key)
+        }
+    }
+
+    func applyDetailFailure(_ error: Error, key: Data, generation: UInt64) {
+        guard generation == detailGeneration else { return }
+        let message: String
+        if let kv = error as? KVClientError, case .serverError(let data) = kv {
+            message = String(decoding: data, as: UTF8.self)
+        } else {
+            message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        }
+        detailState = .failed(key: key, message: message)
+    }
+
+    func loadDetail(for key: Data, using client: KVClient) async {
+        let gen = prepareDetailLoad(for: key)
+        do {
+            async let value = client.get(key)
+            async let ttlState = client.ttl(key)
+            let (v, t) = try await (value, ttlState)
+            guard gen == detailGeneration else { return }
+            applyDetail(value: v, ttl: t, key: key, generation: gen)
+        } catch {
+            guard gen == detailGeneration else { return }
+            applyDetailFailure(error, key: key, generation: gen)
         }
     }
 }

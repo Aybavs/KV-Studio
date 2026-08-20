@@ -12,7 +12,10 @@ final class ServerLogSink: @unchecked Sendable {
         }
         handle = try? FileHandle(forWritingTo: url)
         _ = try? handle?.seekToEnd()
+        isRecording = handle != nil
     }
+
+    let isRecording: Bool
 
     func append(_ data: Data) {
         lock.lock()

@@ -237,6 +237,10 @@ actor ManagedServerController {
 
         let sink = ServerLogSink(url: paths.logFile)
         let continuation = outputContinuation
+        // Losing the file is survivable, but it must not be silent.
+        if !sink.isRecording {
+            continuation.yield("kv-studio: log file unavailable at \(paths.logFile.path); showing live output only")
+        }
         let drains = [standardOutput, standardError].map { pipe in
             ProcessOutputDrain(reading: pipe.fileHandleForReading, sink: sink) { continuation.yield($0) }
         }
@@ -335,6 +339,7 @@ actor ManagedServerController {
     deinit {
         for drain in drains { drain.finish() }
         logSink?.close()
+        outputContinuation.finish()
         guard let child else { return }
         let (pid, identity) = (child.pid, child.identity)
         let graceful = timeouts.gracefulShutdown

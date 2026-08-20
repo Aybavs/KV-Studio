@@ -12,7 +12,8 @@ struct ManagedServerControllerTests {
         probe: .milliseconds(400),
         gracefulShutdown: .milliseconds(500),
         forcedShutdown: .seconds(2),
-        outputDrain: .milliseconds(500)
+        outputDrain: .milliseconds(500),
+        exitPoll: .milliseconds(50)
     )
 
     private func makePaths() throws -> ManagedPaths {
@@ -649,4 +650,38 @@ struct ManagedServerControllerTests {
         #expect(ManagedServerRecordStore(paths: paths).load() == nil)
         _ = await #expect(throws: (any Error).self) { try await starting.value }
     }
+    @Test func noticesWhenTheServerDiesOnItsOwn() async throws {
+        let paths = try makePaths()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+        let server = try pongServer()
+        defer { server.stop() }
+
+        let stranger = try await launchStranger(fixtures, named: "dies")
+        let pid = stranger.processIdentifier
+        defer { kill(pid, SIGKILL) }
+        let identity = try #require(ProcessIdentity.startTime(of: pid))
+
+        try usePort(server.port, in: paths)
+        try ManagedServerRecordStore(paths: paths).save(record(pid: pid, identity: identity, port: server.port))
+
+        let controller = ManagedServerController(paths: paths, resolver: resolver(nil), timeouts: timeouts)
+        #expect(try await controller.start() == pid)
+
+        kill(pid, SIGKILL)
+        try await waitUntilGone(pid: pid)
+
+        var observed = await controller.state
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while observed == .running(pid) && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+            observed = await controller.state
+        }
+
+        #expect(observed != .running(pid))
+        #expect(await controller.endpoint == nil)
+        #expect(ManagedServerRecordStore(paths: paths).load() == nil)
+    }
+
 }

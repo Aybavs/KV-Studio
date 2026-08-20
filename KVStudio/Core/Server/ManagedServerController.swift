@@ -25,6 +25,7 @@ actor ManagedServerController {
     private var drains: [ProcessOutputDrain] = []
     private var startTask: Task<pid_t, Error>?
     private var stopTask: Task<Void, Never>?
+    private var watchTask: Task<Void, Never>?
 
     init(
         paths: ManagedPaths,
@@ -52,7 +53,10 @@ actor ManagedServerController {
                 await stopTask.value
                 continue
             }
-            if case .running(let pid) = currentState { return pid }
+            if case .running(let pid) = currentState {
+                if let child, ProcessIdentity.isAlive(pid: child.pid, since: child.identity) { return pid }
+                await noteChildExited(pid: pid)
+            }
             if let startTask { return try await startTask.value }
             break
         }
@@ -95,6 +99,7 @@ actor ManagedServerController {
         do {
             let pid = try await launchOrAdopt()
             currentState = .running(pid)
+            if let child { beginWatching(child) }
             return pid
         } catch {
             currentState = .failed(Self.message(for: error))
@@ -288,6 +293,8 @@ actor ManagedServerController {
 
     // A process that survived SIGKILL keeps its record: that record is the only way back to it.
     private func discardChild() async -> ManagedServerTerminationOutcome {
+        watchTask?.cancel()
+        watchTask = nil
         guard let child else {
             await closeOutput()
             return .notRunning
@@ -315,6 +322,32 @@ actor ManagedServerController {
         logSink = nil
     }
 
+    // Nothing tells us a child died on its own -- an adopted one has no Process to hand us a
+    // termination handler -- so the state is kept honest by polling the identity we already trust.
+    private func beginWatching(_ child: Child) {
+        watchTask?.cancel()
+        let (pid, identity, poll) = (child.pid, child.identity, timeouts.exitPoll)
+        watchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: poll)
+                guard !Task.isCancelled else { return }
+                guard !ProcessIdentity.isAlive(pid: pid, since: identity) else { continue }
+                await self?.noteChildExited(pid: pid)
+                return
+            }
+        }
+    }
+
+    private func noteChildExited(pid: pid_t) async {
+        guard child?.pid == pid else { return }
+        watchTask?.cancel()
+        watchTask = nil
+        child = nil
+        await closeOutput()
+        records.clear()
+        currentState = .failed("The managed server exited unexpectedly (pid \(pid)).")
+    }
+
     private static func message(for error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
@@ -337,6 +370,7 @@ actor ManagedServerController {
     }
 
     deinit {
+        watchTask?.cancel()
         for drain in drains { drain.finish() }
         logSink?.close()
         outputContinuation.finish()

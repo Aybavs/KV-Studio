@@ -16,6 +16,7 @@ struct ManagedServerTimeouts: Equatable, Sendable {
     var gracefulShutdown: Duration
     var forcedShutdown: Duration
     var outputDrain: Duration
+    var exitPoll: Duration = .seconds(1)
 
     // kv-server's own --shutdown-timeout defaults to 10s; the remainder is UI grace.
     static let `default` = ManagedServerTimeouts(
@@ -24,6 +25,7 @@ struct ManagedServerTimeouts: Equatable, Sendable {
         probe: .seconds(5),
         gracefulShutdown: .seconds(12),
         forcedShutdown: .seconds(3),
-        outputDrain: .seconds(2)
+        outputDrain: .seconds(2),
+        exitPoll: .seconds(1)
     )
 }

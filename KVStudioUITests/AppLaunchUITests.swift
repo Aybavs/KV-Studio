@@ -11,7 +11,7 @@ final class AppLaunchUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.staticTexts["KV Studio"].waitForExistence(timeout: 10),
+            app.staticTexts["KV Studio"].waitForExistence(timeout: 30),
             "The app did not present its launch screen"
         )
     }

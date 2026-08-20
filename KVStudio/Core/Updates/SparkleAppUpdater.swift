@@ -3,35 +3,46 @@ import Observation
 import Sparkle
 
 // Sparkle checks and installs only when the user asks: automatic checking and automatic download
-// are both refused here, and the plan forbids silent installation outright.
+// are both refused, and without a feed no updater is created at all.
 @MainActor
 @Observable
 final class SparkleAppUpdater: NSObject, AppUpdating, SPUUpdaterDelegate {
     private(set) var canCheckForUpdates = false
+    let presenter = AppUpdatePresenter()
 
-    @ObservationIgnored private var controller: SPUStandardUpdaterController?
+    @ObservationIgnored private var updater: SPUUpdater?
     @ObservationIgnored private var observation: NSKeyValueObservation?
+    @ObservationIgnored private var feed: URL?
 
     func start(feedURL: URL?) {
-        guard controller == nil, feedURL != nil else { return }
-        let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: self,
-            userDriverDelegate: nil
+        guard updater == nil, let feedURL else { return }
+        feed = feedURL
+
+        let updater = SPUUpdater(
+            hostBundle: .main,
+            applicationBundle: .main,
+            userDriver: presenter,
+            delegate: self
         )
-        controller.updater.automaticallyChecksForUpdates = false
-        controller.updater.automaticallyDownloadsUpdates = false
-        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+        updater.automaticallyChecksForUpdates = false
+        updater.automaticallyDownloadsUpdates = false
+        do {
+            try updater.start()
+        } catch {
+            presenter.showUpdaterError(error, acknowledgement: {})
+            return
+        }
+        observation = updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             MainActor.assumeIsolated { self?.canCheckForUpdates = updater.canCheckForUpdates }
         }
-        self.controller = controller
+        self.updater = updater
     }
 
     func checkForUpdates() {
-        controller?.updater.checkForUpdates()
+        updater?.checkForUpdates()
     }
 
     nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
-        Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
+        MainActor.assumeIsolated { feed?.absoluteString }
     }
 }

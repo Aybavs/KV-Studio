@@ -81,9 +81,7 @@ struct BrowserDetailView: View {
                             Text("Value")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                            Text(displayString(for: value))
-                                .font(.system(.body, design: .monospaced))
-                                .textSelection(.enabled)
+                            ValueViewer(data: value)
                                 .accessibilityIdentifier("browser.detail.value")
                             Text("\(value.count) bytes")
                                 .font(.caption2)
@@ -119,13 +117,10 @@ struct BrowserDetailView: View {
     }
 
     private func displayString(for data: Data) -> String {
-        if let str = String(data: data, encoding: .utf8), !str.isEmpty || data.isEmpty {
-            // Validate that round-trip preserves bytes to avoid replacement char hiding binary
-            if str.data(using: .utf8) == data {
-                return str
-            }
-        }
         if data.isEmpty { return "(empty)" }
-        return data.map { String(format: "%02x", $0) }.joined(separator: " ")
+        if let str = ValuePresentation.textString(from: data) {
+            return str
+        }
+        return ValuePresentation.hexString(from: data)
     }
 }

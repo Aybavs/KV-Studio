@@ -33,20 +33,7 @@ final class BrowserViewModel {
     }
 
     static func matchPattern(for text: String) -> Data? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.contains("*") || trimmed.contains("?") || trimmed.contains("[") {
-            return Data(trimmed.utf8)
-        }
-        var escaped = ""
-        escaped.reserveCapacity(trimmed.count + 2)
-        for ch in trimmed {
-            if ch == "*" || ch == "?" || ch == "[" || ch == "]" || ch == "\\" {
-                escaped.append("\\")
-            }
-            escaped.append(ch)
-        }
-        return Data("*\(escaped)*".utf8)
+        GlobPattern.matchPattern(for: text)
     }
 
     func shouldLoadMore(at index: Int) -> Bool {

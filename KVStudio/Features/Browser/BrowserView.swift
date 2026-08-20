@@ -3,6 +3,8 @@ import SwiftUI
 struct BrowserView: View {
     @Bindable var coordinator: ConnectionCoordinator
     @State private var viewModel = BrowserViewModel()
+    @State private var searchInput: String = ""
+    @State private var searchTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +19,27 @@ struct BrowserView: View {
                 await viewModel.loadInitial(using: client, count: BrowserViewModel.scanCount)
             }
         }
+        .onAppear {
+            searchInput = viewModel.searchText
+        }
+        .onChange(of: viewModel.searchText) { _, newValue in
+            if newValue != searchInput {
+                searchInput = newValue
+            }
+        }
+        .onChange(of: searchInput) { _, newValue in
+            searchTask?.cancel()
+            searchTask = Task {
+                do {
+                    try await Task.sleep(nanoseconds: GlobPattern.searchDebounceNanoseconds)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                guard let client = coordinator.browser else { return }
+                await viewModel.applySearch(newValue, using: client, count: BrowserViewModel.scanCount)
+            }
+        }
         .onChange(of: coordinator.phase) { _, newPhase in
             if case .connected = newPhase, let client = coordinator.browser {
                 Task { await viewModel.loadInitial(using: client, count: BrowserViewModel.scanCount) }
@@ -27,12 +50,15 @@ struct BrowserView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            TextField("Search keys", text: $viewModel.searchText)
+            TextField("Search keys", text: $searchInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 260)
+                .accessibilityIdentifier("browser.searchField")
                 .onSubmit {
+                    searchTask?.cancel()
+                    let text = searchInput
                     guard let client = coordinator.browser else { return }
-                    Task { await viewModel.applySearch(viewModel.searchText, using: client, count: BrowserViewModel.scanCount) }
+                    Task { await viewModel.applySearch(text, using: client, count: BrowserViewModel.scanCount) }
                 }
             Text("DBSIZE \(viewModel.dbsize)")
                 .font(.caption.monospaced())

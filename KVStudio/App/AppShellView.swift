@@ -14,6 +14,11 @@ struct AppShellView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 800, minHeight: 500)
+        .onChange(of: coordinator.phase) { _, newPhase in
+            if case .connected = newPhase {
+                selection = .browser
+            }
+        }
     }
 
     private var sidebar: some View {

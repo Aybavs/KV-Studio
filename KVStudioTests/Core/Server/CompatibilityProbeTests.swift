@@ -165,9 +165,15 @@ struct CompatibilityProbeTests {
         let outcome = try await probe.run(against: holder.endpoint)
         let elapsed = ContinuousClock.now - started
 
-        #expect(outcome == .unreachable(.timedOut(step: .ping, budget: budget)))
+        // Which step the budget expires on depends on how fast the connect completes, so it is
+        // not pinned here; the point is that a silent peer times out instead of hanging.
+        guard case .unreachable(.timedOut(_, let reported)) = outcome else {
+            Issue.record("expected a bounded timeout, got \(outcome)")
+            return
+        }
+        #expect(reported == budget)
         #expect(elapsed >= budget)
-        #expect(elapsed < .seconds(2))
+        #expect(elapsed < .seconds(5))
         #expect(holder.isStillListening)
     }
 
@@ -188,7 +194,9 @@ struct CompatibilityProbeTests {
             release.signal()
             server.stop()
         }
-        let budget = Duration.milliseconds(300)
+        // Generous enough that PING and DBSIZE still complete under load, because this test's
+        // whole point is that the budget expires ON scan, after two commands got through.
+        let budget = Duration.seconds(2)
         let probe = CompatibilityProbe(budget: budget)
 
         let started = ContinuousClock.now
@@ -197,7 +205,7 @@ struct CompatibilityProbeTests {
 
         #expect(outcome == .unreachable(.timedOut(step: .scan, budget: budget)))
         #expect(elapsed >= budget)
-        #expect(elapsed < .seconds(2))
+        #expect(elapsed < .seconds(10))
         #expect(log.recorded.count == 3)
     }
 

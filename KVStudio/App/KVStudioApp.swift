@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct KVStudioApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var coordinator: ConnectionCoordinator
 
     init() {
@@ -19,10 +20,8 @@ struct KVStudioApp: App {
         WindowGroup {
             AppShellView(coordinator: coordinator)
                 .task {
+                    appDelegate.shutDown = { await coordinator.shutDown() }
                     await coordinator.restoreLastConnection()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    Task { await coordinator.shutDown() }
                 }
         }
         .windowResizability(.contentSize)

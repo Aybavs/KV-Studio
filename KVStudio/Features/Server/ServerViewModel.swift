@@ -38,13 +38,7 @@ final class ServerViewModel {
 
     static func loadAOFSize(at url: URL) -> UInt64? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
-        if let size = attrs[.size] as? UInt64 { return size }
-        if let size = attrs[.size] as? UInt64 { return size }
-        if let number = attrs[.size] as? NSNumber { return number.uint64Value }
-        // Fallback via FileManager default may return NSNumber
-        if let size = attrs[FileAttributeKey.size] as? UInt64 { return size }
-        if let number = attrs[FileAttributeKey.size] as? NSNumber { return number.uint64Value }
-        return nil
+        return (attrs[.size] as? NSNumber)?.uint64Value
     }
 
     static func formatAOFSize(_ size: UInt64?) -> String {

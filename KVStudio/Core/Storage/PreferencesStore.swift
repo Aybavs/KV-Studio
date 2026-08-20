@@ -1,16 +1,7 @@
 import Foundation
-import SwiftUI
 
 enum Appearance: String, Codable, Sendable, CaseIterable {
     case system, light, dark
-
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
-    }
 }
 
 struct Preferences: Equatable, Codable, Sendable {

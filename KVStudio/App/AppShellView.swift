@@ -2,7 +2,13 @@ import SwiftUI
 
 struct AppShellView: View {
     @Bindable var coordinator: ConnectionCoordinator
+    @Bindable var settings: SettingsViewModel
     @State private var selection: AppRoute? = .browser
+
+    init(coordinator: ConnectionCoordinator, settings: SettingsViewModel) {
+        self.coordinator = coordinator
+        self.settings = settings
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -68,7 +74,7 @@ struct AppShellView: View {
         case .logs:
             LogsView(coordinator: coordinator)
         case .settings:
-            SettingsPlaceholderView()
+            SettingsView(viewModel: settings)
         case .none:
             if isConnected {
                 BrowserView(coordinator: coordinator)

@@ -28,7 +28,8 @@ struct SettingsView: View {
             Section("Updates") {
                 Toggle("Auto-check for updates", isOn: $viewModel.autoCheckUpdates)
                     .accessibilityIdentifier("settings.autoCheck")
-                Button("Check for Updates") {}
+                Button("Check for Updates") { viewModel.checkForUpdates() }
+                    .disabled(!viewModel.canCheckForUpdates)
                     .accessibilityIdentifier("settings.checkUpdates")
             }
 

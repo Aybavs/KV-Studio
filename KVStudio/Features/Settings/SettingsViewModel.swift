@@ -6,6 +6,7 @@ import Observation
 final class SettingsViewModel {
     let paths: ManagedPaths
     private let store: PreferencesStore
+    @ObservationIgnored private let updater: any AppUpdating
 
     var appearance: Appearance {
         didSet { save() }
@@ -17,9 +18,10 @@ final class SettingsViewModel {
         didSet { save() }
     }
 
-    init(paths: ManagedPaths) {
+    init(paths: ManagedPaths, updater: any AppUpdating = UnavailableAppUpdater()) {
         self.paths = paths
         self.store = PreferencesStore(paths: paths)
+        self.updater = updater
         let prefs = store.loadPreferences()
         self.appearance = prefs.appearance
         self.reopenLastConnection = prefs.reopenLastConnection
@@ -58,4 +60,9 @@ extension SettingsViewModel {
         let paths = (try? ManagedPaths.resolveDefault()) ?? ManagedPaths(root: URL(filePath: "/tmp/KV Studio"))
         self.init(paths: paths)
     }
+
+    var canCheckForUpdates: Bool { updater.canCheckForUpdates }
+
+    func checkForUpdates() { updater.checkForUpdates() }
+
 }

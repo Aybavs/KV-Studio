@@ -18,7 +18,6 @@ DerivedData/
 .build/
 .swiftpm/
 Packages/
-Package.resolved
 
 # Worktrees
 .worktrees/

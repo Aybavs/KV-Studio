@@ -369,4 +369,21 @@ final class BrowserViewModel {
         if case .expiring = ttl { return true }
         return false
     }
+
+    // MARK: - New Key
+
+    func createKey(key: Data, value: Data, expiration: SetExpiration?, using client: KVClient) async throws {
+        guard !key.isEmpty else { throw BrowserNewKeyError.emptyKey }
+        try await client.set(key: key, value: value, expiration: expiration)
+        if !keys.contains(key) {
+            keys.append(key)
+        }
+        selection = key
+        do {
+            let size = try await client.dbSize()
+            dbsize = size
+        } catch {
+            // DBSIZE refresh is best-effort; creation already succeeded
+        }
+    }
 }

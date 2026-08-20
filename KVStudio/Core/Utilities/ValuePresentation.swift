@@ -38,8 +38,14 @@ enum ValuePresentation {
         guard isValidJSON(data) else { return nil }
         do {
             let obj = try JSONSerialization.jsonObject(with: data, options: [.allowFragments])
-            let pretty = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-            return String(data: pretty, encoding: .utf8)
+            // JSONSerialization.data(withJSONObject:) throws ObjC exception for fragments on newer OS
+            // Only pretty-print collections; fragments round-trip as-is to avoid crash
+            if obj is [Any] || obj is [String: Any] {
+                let pretty = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+                return String(data: pretty, encoding: .utf8)
+            } else {
+                return String(data: data, encoding: .utf8)
+            }
         } catch {
             return nil
         }
@@ -120,5 +126,27 @@ enum ValuePresentation {
             return autoDetectedFormat(for: data)
         }
         return selected
+    }
+
+    enum HexParseError: Error, Equatable, Sendable {
+        case oddLength
+        case invalidCharacter
+    }
+
+    static func data(fromHex string: String) throws(HexParseError) -> Data {
+        let stripped = string.filter { !$0.isWhitespace }
+        if stripped.isEmpty { return Data() }
+        guard stripped.count % 2 == 0 else { throw HexParseError.oddLength }
+        var result = Data()
+        result.reserveCapacity(stripped.count / 2)
+        var index = stripped.startIndex
+        while index < stripped.endIndex {
+            let next = stripped.index(index, offsetBy: 2)
+            let pair = String(stripped[index..<next])
+            guard let byte = UInt8(pair, radix: 16) else { throw HexParseError.invalidCharacter }
+            result.append(byte)
+            index = next
+        }
+        return result
     }
 }

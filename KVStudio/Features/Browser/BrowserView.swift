@@ -5,6 +5,7 @@ struct BrowserView: View {
     @State private var viewModel = BrowserViewModel()
     @State private var searchInput: String = ""
     @State private var searchTask: Task<Void, Never>?
+    @State private var showNewKey = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,6 +50,11 @@ struct BrowserView: View {
             guard let key = newKey, let client = coordinator.browser else { return }
             Task { await viewModel.loadDetail(for: key, using: client) }
         }
+        .sheet(isPresented: $showNewKey) {
+            if let client = coordinator.browser {
+                NewKeyView(viewModel: viewModel, client: client)
+            }
+        }
         .accessibilityIdentifier("browser.view")
     }
 
@@ -68,6 +74,9 @@ struct BrowserView: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
             Spacer()
+            Button("New Key") { showNewKey = true }
+                .disabled(coordinator.browser == nil)
+                .accessibilityIdentifier("browser.newKeyButton")
             Button("Refresh") {
                 guard let client = coordinator.browser else { return }
                 Task { await viewModel.refresh(using: client, count: BrowserViewModel.scanCount) }

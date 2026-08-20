@@ -27,6 +27,8 @@ final class BrowserViewModel {
     private(set) var errorMessage: String?
     private(set) var detailState: BrowserDetailState = .idle
     private(set) var detailGeneration: UInt64 = 0
+    var preserveTTL: Bool = false
+    private(set) var isSaving: Bool = false
 
     var nextCursor: UInt64 { cursor }
 
@@ -85,6 +87,8 @@ final class BrowserViewModel {
         errorMessage = nil
         detailState = .idle
         detailGeneration &+= 1
+        preserveTTL = false
+        isSaving = false
         return generation
     }
 
@@ -171,6 +175,8 @@ final class BrowserViewModel {
         if key == nil {
             detailState = .idle
             detailGeneration &+= 1
+            preserveTTL = false
+            isSaving = false
         }
     }
 
@@ -186,6 +192,8 @@ final class BrowserViewModel {
         errorMessage = nil
         detailState = .idle
         detailGeneration = 0
+        preserveTTL = false
+        isSaving = false
     }
 
     func loadInitial(using client: KVClient, count: Int = scanCount) async {
@@ -257,6 +265,8 @@ final class BrowserViewModel {
     func prepareDetailLoad(for key: Data) -> UInt64 {
         detailGeneration &+= 1
         detailState = .loading(key: key)
+        preserveTTL = false
+        isSaving = false
         return detailGeneration
     }
 
@@ -264,8 +274,10 @@ final class BrowserViewModel {
         guard generation == detailGeneration else { return }
         if let value {
             detailState = .loaded(key: key, value: value, ttl: ttl)
+            preserveTTL = ttlIsExpiring(ttl)
         } else {
             detailState = .missing(key: key)
+            preserveTTL = false
         }
     }
 
@@ -278,6 +290,7 @@ final class BrowserViewModel {
             message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
         }
         detailState = .failed(key: key, message: message)
+        preserveTTL = false
     }
 
     func loadDetail(for key: Data, using client: KVClient) async {
@@ -292,5 +305,68 @@ final class BrowserViewModel {
             guard gen == detailGeneration else { return }
             applyDetailFailure(error, key: key, generation: gen)
         }
+    }
+
+    func save(value newValue: Data, using client: KVClient) async {
+        guard case .loaded(let key, _, _) = detailState else { return }
+        let gen = detailGeneration
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let ttlState = try await client.ttl(key)
+            guard gen == detailGeneration else { return }
+            switch ttlState {
+            case .missing:
+                detailState = .missing(key: key)
+                preserveTTL = false
+                return
+            case .expiring(let seconds) where seconds <= 0:
+                detailState = .failed(key: key, message: "Key expired during editing — TTL reached zero; not saved")
+                preserveTTL = false
+                return
+            case .persistent, .expiring:
+                break
+            }
+            let expiration: SetExpiration?
+            if preserveTTL {
+                switch ttlState {
+                case .expiring(let seconds) where seconds > 0:
+                    expiration = .seconds(seconds)
+                case .persistent:
+                    expiration = nil
+                case .missing, .expiring:
+                    expiration = nil
+                }
+            } else {
+                expiration = nil
+            }
+            try await client.set(key: key, value: newValue, expiration: expiration)
+            guard gen == detailGeneration else { return }
+            async let refreshedValue = client.get(key)
+            async let refreshedTTL = client.ttl(key)
+            let (v, t) = try await (refreshedValue, refreshedTTL)
+            guard gen == detailGeneration else { return }
+            if let v {
+                detailState = .loaded(key: key, value: v, ttl: t)
+                preserveTTL = ttlIsExpiring(t)
+            } else {
+                detailState = .missing(key: key)
+                preserveTTL = false
+            }
+        } catch {
+            guard gen == detailGeneration else { return }
+            let message: String
+            if let kv = error as? KVClientError, case .serverError(let data) = kv {
+                message = String(decoding: data, as: UTF8.self)
+            } else {
+                message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            }
+            detailState = .failed(key: key, message: message)
+        }
+    }
+
+    private func ttlIsExpiring(_ ttl: TTLState) -> Bool {
+        if case .expiring = ttl { return true }
+        return false
     }
 }

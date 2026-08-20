@@ -8,6 +8,10 @@ struct BrowserView: View {
     @State private var showNewKey = false
     @State private var pendingDeleteKey: Data?
     @State private var deleteError: String?
+    @FocusState private var searchFocused: Bool
+    @State private var detailEditText: String = ""
+    @State private var detailEditInitializedKey: Data?
+    @State private var saveError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +56,9 @@ struct BrowserView: View {
             guard let key = newKey, let client = coordinator.browser else { return }
             Task { await viewModel.loadDetail(for: key, using: client) }
         }
+        .onChange(of: viewModel.detailState) { _, newState in
+            syncEditText(with: newState)
+        }
         .sheet(isPresented: $showNewKey) {
             if let client = coordinator.browser {
                 NewKeyView(viewModel: viewModel, client: client)
@@ -87,6 +94,55 @@ struct BrowserView: View {
             }
         }
         .accessibilityIdentifier("browser.view")
+        .background {
+            // Hidden focus trigger for Cmd+F
+            Button("Focus Search") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .accessibilityIdentifier("browser.focusSearchShortcut")
+            // Hidden save trigger for Cmd+S when detail is loaded
+            Button("Save") { performSave() }
+                .keyboardShortcut("s", modifiers: .command)
+                .opacity(0)
+                .disabled(!viewModel.canSave || viewModel.isSaving)
+                .accessibilityIdentifier("browser.saveShortcut")
+        }
+    }
+
+    private func syncEditText(with state: BrowserDetailState) {
+        guard case .loaded(let key, let value, _) = state else {
+            if case .idle = state { detailEditText = "" }
+            detailEditInitializedKey = nil
+            return
+        }
+        // Only reset when key changes to preserve in-progress edits
+        if detailEditInitializedKey != key {
+            if let str = ValuePresentation.textString(from: value) {
+                detailEditText = str
+            } else {
+                detailEditText = ""
+            }
+            detailEditInitializedKey = key
+            saveError = nil
+        }
+    }
+
+    private func performSave() {
+        guard case .loaded(let key, let currentValue, _) = viewModel.detailState else { return }
+        guard let client = coordinator.browser else { return }
+        guard viewModel.canSave, !viewModel.isSaving else { return }
+        let isBinary = !ValuePresentation.isValidUTF8(currentValue)
+        if isBinary { return }
+        let newData = Data(detailEditText.utf8)
+        saveError = nil
+        Task {
+            await viewModel.save(value: newData, using: client)
+            if case .failed(let k, let msg) = viewModel.detailState, k == key {
+                saveError = msg
+            } else {
+                saveError = nil
+            }
+        }
     }
 
     private var header: some View {
@@ -94,6 +150,7 @@ struct BrowserView: View {
             TextField("Search keys", text: $searchInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 260)
+                .focused($searchFocused)
                 .accessibilityIdentifier("browser.searchField")
                 .onSubmit {
                     searchTask?.cancel()
@@ -101,53 +158,145 @@ struct BrowserView: View {
                     guard let client = coordinator.browser else { return }
                     Task { await viewModel.applySearch(text, using: client, count: BrowserViewModel.scanCount) }
                 }
+            if viewModel.isShowingRefreshOverlay {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityIdentifier("browser.refresh.progress")
+            }
             Text("DBSIZE \(viewModel.dbsize)")
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
             Spacer()
             Button("New Key") { showNewKey = true }
                 .disabled(coordinator.browser == nil)
+                .keyboardShortcut("n", modifiers: .command)
                 .accessibilityIdentifier("browser.newKeyButton")
             Button("Refresh") {
                 guard let client = coordinator.browser else { return }
                 Task { await viewModel.refresh(using: client, count: BrowserViewModel.scanCount) }
             }
-            .disabled(viewModel.state == .initialLoading || viewModel.state == .refreshing)
+            .disabled(!viewModel.canRefresh)
+            .keyboardShortcut("r", modifiers: .command)
+            .accessibilityIdentifier("browser.refreshButton")
         }
         .padding(8)
     }
 
     @ViewBuilder
     private var content: some View {
-        switch viewModel.state {
-        case .idle, .initialLoading, .refreshing where viewModel.keys.isEmpty:
-            VStack(spacing: 12) {
+        if viewModel.isShowingInitialSkeleton {
+            skeletonView
+        } else {
+            switch viewModel.state {
+            case .failed where viewModel.keys.isEmpty:
+                VStack(spacing: 12) {
+                    Text("Failed to load keys")
+                        .font(.headline)
+                    if let msg = viewModel.errorMessage {
+                        Text(msg)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    Button("Retry") {
+                        guard let client = coordinator.browser else { return }
+                        Task { await viewModel.loadInitial(using: client, count: BrowserViewModel.scanCount) }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("browser.failed")
+            default:
+                if viewModel.keys.isEmpty {
+                    emptyView
+                } else {
+                    browserContent
+                }
+            }
+        }
+    }
+
+    private var skeletonView: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
                 ProgressView()
+                    .controlSize(.small)
                 Text("Loading keys…")
                     .foregroundStyle(.secondary)
-                    .font(.callout)
+                    .font(.callout.monospaced())
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("browser.loading")
-        case .failed where viewModel.keys.isEmpty:
-            VStack(spacing: 12) {
-                Text("Failed to load keys")
-                    .font(.headline)
-                if let msg = viewModel.errorMessage {
-                    Text(msg)
-                        .font(.caption.monospaced())
+            .padding(12)
+            List {
+                ForEach(0..<8, id: \.self) { _ in
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        Text("key_placeholder_xxxxxxxx")
+                            .font(.system(.body, design: .monospaced))
+                            .redacted(reason: .placeholder)
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                    .listRowBackground(Color.clear)
+                }
+            }
+            .listStyle(.plain)
+            .disabled(true)
+            .redacted(reason: .placeholder)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("browser.loading")
+    }
+
+    private var emptyView: some View {
+        Group {
+            if viewModel.isShowingEmptyDatabase {
+                VStack(spacing: 10) {
+                    Image(systemName: "externaldrive.badge.questionmark")
+                        .font(.title2)
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    Text("No keys")
+                        .font(.headline)
+                    Text("Database is empty.")
+                        .foregroundStyle(.secondary)
+                        .font(.callout.monospaced())
+                    Text("Create your first key to get started.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    Button("New Key") { showNewKey = true }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("browser.empty.newKeyButton")
                 }
-                Button("Retry") {
-                    guard let client = coordinator.browser else { return }
-                    Task { await viewModel.loadInitial(using: client, count: BrowserViewModel.scanCount) }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("browser.empty.db")
+            } else if viewModel.isShowingNoResults {
+                VStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("No results")
+                        .font(.headline)
+                    Text("No results for current search.")
+                        .foregroundStyle(.secondary)
+                        .font(.callout.monospaced())
+                    if !viewModel.searchText.isEmpty {
+                        Text("No keys matching \"\(viewModel.searchText)\"")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .accessibilityIdentifier("browser.empty.searchPattern")
+                    }
+                    Button("Clear Search") {
+                        searchInput = ""
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("browser.empty.clearSearchButton")
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("browser.failed")
-        default:
-            if viewModel.keys.isEmpty {
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("browser.empty.search")
+            } else {
+                // Fallback empty (covers edge where state not loaded yet)
                 VStack(spacing: 8) {
                     Text("No keys")
                         .font(.headline)
@@ -157,8 +306,6 @@ struct BrowserView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("browser.empty")
-            } else {
-                browserContent
             }
         }
     }
@@ -176,30 +323,80 @@ struct BrowserView: View {
     private var detailPane: some View {
         VStack(spacing: 0) {
             BrowserDetailView(state: viewModel.detailState)
-            if case .loaded(let key, _, _) = viewModel.detailState {
+            if case .loaded(let key, let value, let ttl) = viewModel.detailState {
                 Divider()
-                HStack(spacing: 12) {
-                    Spacer()
-                    if let err = deleteError {
-                        Text(err)
+                VStack(alignment: .leading, spacing: 8) {
+                    // Preserve TTL toggle (charcoal/purple theme, monospace TTL already in detail)
+                    if case .expiring = ttl {
+                        Toggle(isOn: $viewModel.preserveTTL) {
+                            Text("Preserve TTL")
+                                .font(.caption.monospaced())
+                        }
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("browser.preserveTTLToggle")
+                    }
+                    // Editable value field – monospace, charcoal
+                    if ValuePresentation.isValidUTF8(value) {
+                        Text("Edit Value")
+                            .font(.caption.weight(.semibold).monospaced())
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $detailEditText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(minHeight: 60, maxHeight: 120)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)))
+                            .accessibilityIdentifier("browser.editField")
+                            .disabled(viewModel.isSaving)
+                        if viewModel.isSaving {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Saving…").font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                            .accessibilityIdentifier("browser.save.progress")
+                        }
+                        if let err = saveError {
+                            Text(err)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.red)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .accessibilityIdentifier("browser.save.error")
+                        }
+                    } else {
+                        Text("Binary value — editing as text is disabled. View in Hex.")
                             .font(.caption.monospaced())
-                            .foregroundStyle(.red)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                            .accessibilityIdentifier("browser.delete.error")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("browser.edit.binaryNotice")
                     }
-                    if viewModel.isDeleting {
-                        ProgressView()
-                            .controlSize(.small)
-                            .accessibilityIdentifier("browser.delete.progress")
+                    HStack(spacing: 12) {
+                        Spacer()
+                        if let err = deleteError {
+                            Text(err)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.red)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .accessibilityIdentifier("browser.delete.error")
+                        }
+                        if viewModel.isDeleting {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityIdentifier("browser.delete.progress")
+                        }
+                        Button(role: .destructive) { pendingDeleteKey = key } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                        .disabled(viewModel.isDeleting || viewModel.isSaving)
+                        .accessibilityIdentifier("browser.deleteButton")
+                        if ValuePresentation.isValidUTF8(value) {
+                            Button("Save") { performSave() }
+                                .buttonStyle(.borderedProminent)
+                                .keyboardShortcut("s", modifiers: .command)
+                                .disabled(!viewModel.canSave || viewModel.isSaving || viewModel.isDeleting)
+                                .accessibilityIdentifier("browser.saveButton")
+                        }
                     }
-                    Button(role: .destructive) { pendingDeleteKey = key } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    .disabled(viewModel.isDeleting)
-                    .accessibilityIdentifier("browser.deleteButton")
                 }
                 .padding(8)
             }

@@ -10,6 +10,11 @@ enum BrowserState: Equatable, Sendable {
     case failed
 }
 
+enum BrowserEmptyState: Equatable, Sendable {
+    case emptyDatabase
+    case noSearchResults(pattern: String)
+}
+
 @MainActor
 @Observable
 final class BrowserViewModel {
@@ -32,6 +37,58 @@ final class BrowserViewModel {
     private(set) var isDeleting: Bool = false
 
     var nextCursor: UInt64 { cursor }
+
+    // MARK: - Polish helpers (Task 25)
+
+    var currentEmptyState: BrowserEmptyState? {
+        guard keys.isEmpty, state == .loaded else { return nil }
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .emptyDatabase
+        } else {
+            return .noSearchResults(pattern: searchText)
+        }
+    }
+
+    var isShowingEmptyDatabase: Bool { currentEmptyState == .emptyDatabase }
+    var isShowingNoResults: Bool {
+        if case .noSearchResults = currentEmptyState { return true }
+        return false
+    }
+
+    var emptyStateTitle: String {
+        switch currentEmptyState {
+        case .emptyDatabase: return "Database is empty."
+        case .noSearchResults: return "No results for current search."
+        case nil:
+            if keys.isEmpty && state == .loaded && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Database is empty."
+            }
+            return "No results for current search."
+        }
+    }
+
+    var emptyStateTitleForNoResults: String? {
+        if case .noSearchResults(let pattern) = currentEmptyState { return pattern }
+        return nil
+    }
+
+    var isShowingInitialSkeleton: Bool {
+        keys.isEmpty && (state == .initialLoading || state == .refreshing)
+    }
+
+    var isShowingRefreshOverlay: Bool {
+        !keys.isEmpty && state == .refreshing
+    }
+
+    var canRefresh: Bool { state == .loaded || state == .failed }
+    var canSave: Bool {
+        if case .loaded = detailState { return true }
+        return false
+    }
+    var canDelete: Bool {
+        if case .loaded = detailState { return true }
+        return false
+    }
 
     func matchPattern() -> Data? {
         Self.matchPattern(for: searchText)

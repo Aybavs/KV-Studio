@@ -227,6 +227,7 @@ struct ServerViewModelManagedTests {
 }
 
 private actor StubServerForViewModel: ManagedServerHosting {
+    nonisolated var outputLines: AsyncStream<String> { AsyncStream { $0.finish() } }
     let endpoint: ConnectionEndpoint
     private(set) var stopCount = 0
     init(endpoint: ConnectionEndpoint = ConnectionEndpoint(host: "127.0.0.1", port: 6380)) {

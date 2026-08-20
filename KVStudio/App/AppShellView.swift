@@ -66,7 +66,7 @@ struct AppShellView: View {
         case .server:
             ServerView(coordinator: coordinator)
         case .logs:
-            LogsPlaceholderView()
+            LogsView(coordinator: coordinator)
         case .settings:
             SettingsPlaceholderView()
         case .none:

@@ -26,6 +26,8 @@ final class ConnectionCoordinator {
     @ObservationIgnored private var ownsManagedServer = false
     @ObservationIgnored private var lastTarget: ConnectionTarget?
 
+    var outputLines: AsyncStream<String> { server.outputLines }
+
     init(
         paths: ManagedPaths,
         server: any ManagedServerHosting,

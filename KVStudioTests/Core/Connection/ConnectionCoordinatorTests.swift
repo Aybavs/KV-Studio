@@ -41,6 +41,8 @@ private actor StubManagedServer: ManagedServerHosting {
     private let entered = Signal()
     private var liveStarts = 0
 
+    nonisolated var outputLines: AsyncStream<String> { AsyncStream { $0.finish() } }
+
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var maxConcurrentStarts = 0

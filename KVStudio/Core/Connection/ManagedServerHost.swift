@@ -34,4 +34,6 @@ struct ManagedServerHost: ManagedServerHosting {
         }
         return .unreclaimed(pid)
     }
+
+    var outputLines: AsyncStream<String> { controller.outputLines }
 }

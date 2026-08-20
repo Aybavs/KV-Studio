@@ -56,12 +56,7 @@ final class ServerViewModel {
     }
 
     static func isManaged(phase: ConnectionPhase) -> Bool {
-        switch phase {
-        case .connected(let session): return session.target == .managedLocal
-        case .connecting(let target): return target == .managedLocal
-        case .failed(let attempt): return attempt.target == .managedLocal
-        case .disconnected: return true
-        }
+        LogsAvailability.isManaged(phase: phase)
     }
 
     static func stateText(managedServer: ManagedServerStatus, phase: ConnectionPhase) -> String {

@@ -152,6 +152,7 @@ struct ConnectionRestorationBehaviorTests {
 }
 
 private actor StubLifecycleHost: ManagedServerHosting {
+    nonisolated var outputLines: AsyncStream<String> { AsyncStream { $0.finish() } }
     private let handle: ManagedServerHandle?
     private let failure: (any Error)?
     private(set) var startCount = 0

@@ -49,6 +49,7 @@ enum ManagedServerStopOutcome: Equatable, Sendable {
 }
 
 protocol ManagedServerHosting: Sendable {
+    var outputLines: AsyncStream<String> { get }
     func start() async throws -> ManagedServerHandle
     func stop() async -> ManagedServerStopOutcome
 }

@@ -29,6 +29,7 @@ final class BrowserViewModel {
     private(set) var detailGeneration: UInt64 = 0
     var preserveTTL: Bool = false
     private(set) var isSaving: Bool = false
+    private(set) var isDeleting: Bool = false
 
     var nextCursor: UInt64 { cursor }
 
@@ -89,6 +90,7 @@ final class BrowserViewModel {
         detailGeneration &+= 1
         preserveTTL = false
         isSaving = false
+        isDeleting = false
         return generation
     }
 
@@ -177,6 +179,7 @@ final class BrowserViewModel {
             detailGeneration &+= 1
             preserveTTL = false
             isSaving = false
+            isDeleting = false
         }
     }
 
@@ -194,6 +197,7 @@ final class BrowserViewModel {
         detailGeneration = 0
         preserveTTL = false
         isSaving = false
+        isDeleting = false
     }
 
     func loadInitial(using client: KVClient, count: Int = scanCount) async {
@@ -267,6 +271,7 @@ final class BrowserViewModel {
         detailState = .loading(key: key)
         preserveTTL = false
         isSaving = false
+        isDeleting = false
         return detailGeneration
     }
 
@@ -368,6 +373,44 @@ final class BrowserViewModel {
     private func ttlIsExpiring(_ ttl: TTLState) -> Bool {
         if case .expiring = ttl { return true }
         return false
+    }
+
+    // MARK: - Delete
+
+    nonisolated static func deletePreview(for key: Data, maxLength: Int = 64) -> String {
+        if key.isEmpty { return "(empty)" }
+        let raw: String
+        if let s = ValuePresentation.textString(from: key) {
+            raw = s
+        } else {
+            raw = ValuePresentation.hexString(from: key)
+        }
+        if raw.count <= maxLength { return raw }
+        let ellipsis = "…"
+        let keep = maxLength - ellipsis.count
+        let prefixCount = keep / 2
+        let suffixCount = keep - prefixCount
+        return String(raw.prefix(prefixCount)) + ellipsis + String(raw.suffix(suffixCount))
+    }
+
+    func deleteKey(_ key: Data, using client: KVClient) async throws {
+        isDeleting = true
+        defer { isDeleting = false }
+        _ = try await client.delete([key])
+        keys.removeAll { $0 == key }
+        if selection == key {
+            selection = nil
+            detailState = .idle
+            detailGeneration &+= 1
+            preserveTTL = false
+            isSaving = false
+        }
+        do {
+            let size = try await client.dbSize()
+            dbsize = size
+        } catch {
+            // best-effort
+        }
     }
 
     // MARK: - New Key

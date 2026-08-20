@@ -6,6 +6,8 @@ struct BrowserView: View {
     @State private var searchInput: String = ""
     @State private var searchTask: Task<Void, Never>?
     @State private var showNewKey = false
+    @State private var pendingDeleteKey: Data?
+    @State private var deleteError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +55,35 @@ struct BrowserView: View {
         .sheet(isPresented: $showNewKey) {
             if let client = coordinator.browser {
                 NewKeyView(viewModel: viewModel, client: client)
+            }
+        }
+        .alert("Delete key?", isPresented: showDeleteAlert, presenting: pendingDeleteKey) { key in
+            Button("Delete", role: .destructive) {
+                guard let client = coordinator.browser else { return }
+                Task {
+                    do {
+                        try await viewModel.deleteKey(key, using: client)
+                        deleteError = nil
+                    } catch {
+                        if let kv = error as? KVClientError, case .serverError(let data) = kv {
+                            deleteError = String(decoding: data, as: UTF8.self)
+                        } else {
+                            deleteError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                        }
+                    }
+                    pendingDeleteKey = nil
+                }
+            }
+            .accessibilityIdentifier("browser.delete.confirm")
+            Button("Cancel", role: .cancel) { pendingDeleteKey = nil }
+        } message: { key in
+            VStack(alignment: .leading, spacing: 6) {
+                Text("This action cannot be undone.")
+                Text(BrowserViewModel.deletePreview(for: key))
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("browser.delete.preview")
             }
         }
         .accessibilityIdentifier("browser.view")
@@ -137,9 +168,46 @@ struct BrowserView: View {
             list
                 .frame(minWidth: 220, idealWidth: 320, maxWidth: .infinity)
             Divider()
-            BrowserDetailView(state: viewModel.detailState)
+            detailPane
                 .frame(minWidth: 220, idealWidth: 360, maxWidth: .infinity)
         }
+    }
+
+    private var detailPane: some View {
+        VStack(spacing: 0) {
+            BrowserDetailView(state: viewModel.detailState)
+            if case .loaded(let key, _, _) = viewModel.detailState {
+                Divider()
+                HStack(spacing: 12) {
+                    Spacer()
+                    if let err = deleteError {
+                        Text(err)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .accessibilityIdentifier("browser.delete.error")
+                    }
+                    if viewModel.isDeleting {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityIdentifier("browser.delete.progress")
+                    }
+                    Button(role: .destructive) { pendingDeleteKey = key } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .disabled(viewModel.isDeleting)
+                    .accessibilityIdentifier("browser.deleteButton")
+                }
+                .padding(8)
+            }
+        }
+    }
+
+    private var showDeleteAlert: Binding<Bool> {
+        Binding(get: { pendingDeleteKey != nil }, set: { if !$0 { pendingDeleteKey = nil } })
     }
 
     private var list: some View {
@@ -149,6 +217,16 @@ struct BrowserView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { viewModel.select(key) }
                     .listRowBackground(viewModel.selection == key ? Color.accentColor.opacity(0.12) : Color.clear)
+                    .contextMenu {
+                        Button("Delete", role: .destructive) { pendingDeleteKey = key }
+                            .accessibilityIdentifier("browser.row.delete.\(BrowserViewModel.deletePreview(for: key))")
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) { pendingDeleteKey = key } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .tint(.red)
+                    }
                     .onAppear {
                         guard viewModel.shouldLoadMore(at: index) else { return }
                         guard let client = coordinator.browser else { return }

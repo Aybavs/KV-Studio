@@ -47,11 +47,18 @@ struct BackendActivator: Sendable {
     let paths: ManagedPaths
     let host: any ManagedServerHosting
     let prober: any BackendProbing
+    let onVerifying: @Sendable () -> Void
 
-    init(paths: ManagedPaths, host: any ManagedServerHosting, prober: any BackendProbing = CompatibilityProbeAdapter()) {
+    init(
+        paths: ManagedPaths,
+        host: any ManagedServerHosting,
+        prober: any BackendProbing = CompatibilityProbeAdapter(),
+        onVerifying: @escaping @Sendable () -> Void = {}
+    ) {
         self.paths = paths
         self.host = host
         self.prober = prober
+        self.onVerifying = onVerifying
     }
 
     func activate() async throws -> BackendActivation {
@@ -66,6 +73,7 @@ struct BackendActivator: Sendable {
 
         do {
             let handle = try await host.start()
+            onVerifying()
             let outcome = try await prober.probe(handle.endpoint)
             guard outcome == .compatible else {
                 throw BackendActivationError.rolledBack("The server reported \(outcome).")

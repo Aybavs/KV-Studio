@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 protocol AppUpdating: AnyObject {
     var canCheckForUpdates: Bool { get }
+    var availableVersion: String? { get }
     func checkForUpdates()
 }
 
@@ -11,5 +12,6 @@ protocol AppUpdating: AnyObject {
 @MainActor
 final class UnavailableAppUpdater: AppUpdating {
     let canCheckForUpdates = false
+    let availableVersion: String? = nil
     func checkForUpdates() {}
 }

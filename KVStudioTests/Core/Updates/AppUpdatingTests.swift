@@ -5,6 +5,7 @@ import Testing
 @MainActor
 private final class StubUpdater: AppUpdating {
     var canCheckForUpdates: Bool
+    var availableVersion: String?
     private(set) var checks = 0
 
     init(canCheckForUpdates: Bool) { self.canCheckForUpdates = canCheckForUpdates }

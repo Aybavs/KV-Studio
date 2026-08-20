@@ -10,6 +10,11 @@ final class SparkleAppUpdater: NSObject, AppUpdating, SPUUpdaterDelegate {
     private(set) var canCheckForUpdates = false
     let presenter = AppUpdatePresenter()
 
+    var availableVersion: String? {
+        if case .found(let version) = presenter.phase { return version }
+        return nil
+    }
+
     @ObservationIgnored private var updater: SPUUpdater?
     @ObservationIgnored private var observation: NSKeyValueObservation?
     @ObservationIgnored private var feed: URL?

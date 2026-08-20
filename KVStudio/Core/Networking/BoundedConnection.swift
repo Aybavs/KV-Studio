@@ -45,18 +45,13 @@ enum BoundedConnection {
                     return .expired
                 }
 
-                var outcome: Arm<T>?
                 while let next = try await group.next() {
-                    if case .value = next {
-                        outcome = next
-                        break
+                    if case .value(let value) = next {
+                        group.cancelAll()
+                        return value
                     }
                 }
-                group.cancelAll()
-                guard case .value(let value)? = outcome else {
-                    throw BoundedConnectionError.timedOut(budget)
-                }
-                return value
+                throw BoundedConnectionError.timedOut(budget)
             }
             await connection.disconnect()
             return value

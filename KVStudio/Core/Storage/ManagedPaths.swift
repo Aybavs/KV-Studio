@@ -1,6 +1,6 @@
 import Foundation
 
-struct ManagedPaths: Equatable, Sendable {
+struct ManagedPaths: Sendable {
     let root: URL
 
     var backendDir: URL { root.appendingPathComponent("backend", isDirectory: true) }

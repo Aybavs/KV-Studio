@@ -1,11 +1,16 @@
 import Foundation
 
 /// `MAJOR.MINOR.PATCH`, optional leading `v` and `-prerelease` suffix. No build metadata.
-struct SemanticVersion: Equatable, Comparable, Sendable {
+struct SemanticVersion: Equatable, Comparable, Sendable, CustomStringConvertible {
     let major: Int
     let minor: Int
     let patch: Int
     let prerelease: String?
+
+    var description: String {
+        let core = "\(major).\(minor).\(patch)"
+        return prerelease.map { "\(core)-\($0)" } ?? core
+    }
 
     init?(string: String) {
         var remainder = Substring(string)

@@ -39,4 +39,10 @@ struct SemanticVersionTests {
         #expect(prerelease < release)
         #expect(release > prerelease)
     }
+    @Test func describesItselfInTheFormItWasParsedFrom() throws {
+        #expect(try #require(SemanticVersion(string: "1.2.3")).description == "1.2.3")
+        #expect(try #require(SemanticVersion(string: "v1.2.3")).description == "1.2.3")
+        #expect(try #require(SemanticVersion(string: "1.2.3-beta.1")).description == "1.2.3-beta.1")
+    }
+
 }

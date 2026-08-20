@@ -109,6 +109,8 @@ private final class InvariantWatch {
             _ = coordinator.phase
             _ = coordinator.browser
         } onChange: { [weak self] in
+            // A sampler, not an exhaustive invariant: onChange is nonisolated and fires before the
+            // mutation lands, so both the read and the re-arm must hop to the main actor.
             Task { @MainActor in
                 guard let self, self.armed else { return }
                 if case .connected = coordinator.phase, coordinator.browser == nil {
@@ -447,6 +449,9 @@ struct ConnectionCoordinatorTests {
         let second = Task { await coordinator.connect(to: .managedLocal) }
         let third = Task { await coordinator.connect(to: .managedLocal) }
         for _ in 0..<4 { await Task.yield() }
+        // Without this the test could pass vacuously: if the later two never reached the attempt
+        // machine, "at most one concurrent start" would be true for the wrong reason.
+        #expect(await host.startCount == 1)
         gate.open()
         await first.value
         await second.value

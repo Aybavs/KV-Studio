@@ -136,30 +136,28 @@ struct ServerViewModelManagedTests {
         #expect(vm.aofModeText == "AOF enabled — appendfsync everysec")
     }
 
-    @Test func hostPortUsesPreferencesWhenManagedDisconnected() throws {
-        let paths = try makePaths()
-        // default preferences are 127.0.0.1:6380
-        let stub = StubServerForViewModel()
-        let coordinator = ConnectionCoordinator(paths: paths, server: stub)
-        // coordinator.phase is disconnected by default
-        let hostPort = ServerViewModel.hostPortText(coordinator: coordinator, paths: paths)
-        #expect(hostPort == "127.0.0.1:6380")
+    @Test func hostPortUsesPreferencesWhenManagedDisconnected() {
+        let text = ServerViewModel.hostPortText(phase: .disconnected, preferences: .default)
+        #expect(text == "127.0.0.1:6380")
     }
 
-    @Test func hostPortUsesSessionWhenConnected() throws {
-        let paths = try makePaths()
-        let stub = StubServerForViewModel()
-        let coordinator = ConnectionCoordinator(paths: paths, server: stub)
-        // We cannot directly set coordinator phase; test static with a fake coordinator?
-        // Instead test that when we save a connected session via helper, the formatting uses it.
-        // For now verify existing path via direct call with a coordinator that we set phase via internal?
-        // We'll just verify the static helper handles connected case if we subclass? Simplify: test that preferences path is correct.
-        #expect(hostPortStillPreferencesWhenDisconnected(coordinator: coordinator, paths: paths) == true)
+    @Test func hostPortUsesSessionWhenConnected() {
+        let endpoint = ConnectionEndpoint(host: "10.0.0.5", port: 7000)
+        let session = ConnectionSession(target: .existing(endpoint), endpoint: endpoint)
+        let text = ServerViewModel.hostPortText(phase: .connected(session), preferences: .default)
+        #expect(text == "10.0.0.5:7000")
     }
 
-    private func hostPortStillPreferencesWhenDisconnected(coordinator: ConnectionCoordinator, paths: ManagedPaths) -> Bool {
-        let hp = ServerViewModel.hostPortText(coordinator: coordinator, paths: paths)
-        return hp == "127.0.0.1:6380"
+    @Test func hostPortUsesTheTargetWhileConnectingToAnExistingServer() {
+        let endpoint = ConnectionEndpoint(host: "192.168.1.9", port: 6399)
+        let text = ServerViewModel.hostPortText(phase: .connecting(.existing(endpoint)), preferences: .default)
+        #expect(text == "192.168.1.9:6399")
+    }
+
+    @Test func hostPortFallsBackToPreferencesForAManagedTarget() {
+        let preferences = Preferences(localBindHost: "127.0.0.1", localPort: 7777)
+        let text = ServerViewModel.hostPortText(phase: .connecting(.managedLocal), preferences: preferences)
+        #expect(text == "127.0.0.1:7777")
     }
 
     @Test func binaryAndDataPathsExposed() throws {

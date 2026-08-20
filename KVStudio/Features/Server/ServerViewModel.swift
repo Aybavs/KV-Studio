@@ -10,6 +10,7 @@ final class ServerViewModel {
 
     private(set) var backendVersion: String?
     private(set) var aofFileSize: UInt64?
+    private(set) var preferences: Preferences = .default
 
     init(paths: ManagedPaths, coordinator: ConnectionCoordinator) {
         self.paths = paths
@@ -24,6 +25,7 @@ final class ServerViewModel {
     func refresh() {
         backendVersion = Self.loadBackendVersion(from: paths.backendCurrentMetadata)
         aofFileSize = Self.loadAOFSize(at: paths.aofFile)
+        preferences = PreferencesStore(paths: paths).loadPreferences()
     }
 
     // MARK: - Static helpers (testable)
@@ -83,21 +85,19 @@ final class ServerViewModel {
         }
     }
 
-    static func hostPortText(coordinator: ConnectionCoordinator, paths: ManagedPaths) -> String {
-        switch coordinator.phase {
+    static func hostPortText(phase: ConnectionPhase, preferences: Preferences) -> String {
+        let local = "\(preferences.localBindHost):\(preferences.localPort)"
+        switch phase {
         case .connected(let session):
             return "\(session.endpoint.host):\(session.endpoint.port)"
         case .connecting(let target):
-            if case .existing(let ep) = target { return "\(ep.host):\(ep.port)" }
-            let prefs = PreferencesStore(paths: paths).loadPreferences()
-            return "\(prefs.localBindHost):\(prefs.localPort)"
+            if case .existing(let endpoint) = target { return "\(endpoint.host):\(endpoint.port)" }
+            return local
         case .failed(let attempt):
-            if case .existing(let ep) = attempt.target { return "\(ep.host):\(ep.port)" }
-            let prefs = PreferencesStore(paths: paths).loadPreferences()
-            return "\(prefs.localBindHost):\(prefs.localPort)"
+            if case .existing(let endpoint) = attempt.target { return "\(endpoint.host):\(endpoint.port)" }
+            return local
         case .disconnected:
-            let prefs = PreferencesStore(paths: paths).loadPreferences()
-            return "\(prefs.localBindHost):\(prefs.localPort)"
+            return local
         }
     }
 
@@ -109,7 +109,7 @@ final class ServerViewModel {
 
     var pidText: String { Self.pidText(managedServer: coordinator.managedServer) }
 
-    var hostPortText: String { Self.hostPortText(coordinator: coordinator, paths: paths) }
+    var hostPortText: String { Self.hostPortText(phase: coordinator.phase, preferences: preferences) }
 
     var backendVersionText: String { backendVersion ?? "Unknown" }
 

@@ -116,6 +116,8 @@ enum FixtureScript {
 
     static let exitsEarly = "sleep 0.05\nexit 3\n"
 
+    static let shoutsThenDies = "echo \"LAST-GASP\" >&2\nexit 0\n"
+
     static let floodsStandardError = """
     i=0
     while [ "$i" -lt 4000 ]; do

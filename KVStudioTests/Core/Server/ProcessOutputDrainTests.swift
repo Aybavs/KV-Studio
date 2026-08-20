@@ -103,6 +103,35 @@ extension ProcessOutputDrainTests {
         drain.finish()
         sink.close()
     }
+
+    // C4's other half: output written in the instant before the child exits must survive the
+    // teardown that follows, rather than being dropped when the read end is closed.
+    @Test func keepsOutputWrittenImmediatelyBeforeTheChildExits() async throws {
+        let fixtures = try ProcessFixtures()
+        defer { fixtures.remove() }
+        let script = try await fixtures.launchableScript(named: "gasp", body: FixtureScript.shoutsThenDies)
+        let logFile = fixtures.directory.appendingPathComponent("gasp.log")
+
+        let sink = ServerLogSink(url: logFile)
+        let lines = LineCollector()
+
+        let process = Process()
+        process.executableURL = script
+        let errorPipe = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errorPipe
+        try process.run()
+
+        let drain = ProcessOutputDrain(reading: errorPipe.fileHandleForReading, sink: sink) { lines.append($0) }
+        process.waitUntilExit()
+        await drain.waitUntilFinished(within: .seconds(5))
+        drain.finish()
+        sink.close()
+
+        #expect(lines.snapshot().contains("LAST-GASP"))
+        let persisted = try String(contentsOf: logFile, encoding: .utf8)
+        #expect(persisted.contains("LAST-GASP"))
+    }
 }
 
 final class LineCollector: @unchecked Sendable {

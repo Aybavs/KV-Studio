@@ -108,6 +108,9 @@ final class FakePeer: @unchecked Sendable {
         defer { lock.unlock() }
         guard !isClosed else { return }
         isClosed = true
+        // Wake a handler parked in read() before the descriptor goes away, so it sees EOF instead
+        // of having the number freed under an in-flight syscall.
+        Darwin.shutdown(descriptor, SHUT_RDWR)
         Darwin.close(descriptor)
     }
 

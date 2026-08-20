@@ -7,10 +7,6 @@ struct PortConflictInspectorTests {
 
     private let inspector = PortConflictInspector(budget: .milliseconds(800))
 
-    private func endpoint(_ server: FakeServer) -> ConnectionEndpoint {
-        ConnectionEndpoint(host: "127.0.0.1", port: server.port)
-    }
-
     @Test func freePortIsNotOccupied() async throws {
         let port = try KVServerProcess.allocatePort()
 
@@ -36,7 +32,7 @@ struct PortConflictInspectorTests {
         }
         defer { server.stop() }
 
-        let occupancy = try await inspector.inspect(endpoint(server))
+        let occupancy = try await inspector.inspect(server.endpoint)
 
         #expect(occupancy.isOccupied)
         #expect(occupancy.occupant == .compatible)
@@ -51,7 +47,7 @@ struct PortConflictInspectorTests {
         }
         defer { server.stop() }
 
-        let occupancy = try await inspector.inspect(endpoint(server))
+        let occupancy = try await inspector.inspect(server.endpoint)
 
         #expect(occupancy.isOccupied)
         #expect(occupancy.occupant == .incompatible(
@@ -79,6 +75,6 @@ struct PortConflictInspectorTests {
         #expect(reported == budget)
         #expect(elapsed >= budget)
         #expect(elapsed < .seconds(5))
-        #expect(holder.isStillListening)
+        #expect(holder.acceptedPeerHungUp(within: .seconds(2)))
     }
 }

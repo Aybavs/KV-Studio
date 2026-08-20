@@ -38,10 +38,6 @@ struct CompatibilityProbeTests {
         }
     }
 
-    private func endpoint(_ server: FakeServer) -> ConnectionEndpoint {
-        ConnectionEndpoint(host: "127.0.0.1", port: server.port)
-    }
-
     private var pong: String { "+PONG\r\n" }
     private var zeroKeys: String { ":0\r\n" }
     private var emptyPage: String { "*2\r\n$1\r\n0\r\n*0\r\n" }
@@ -53,7 +49,7 @@ struct CompatibilityProbeTests {
         let server = try scriptedServer(log, replies: [pong, ":3\r\n", "*2\r\n$1\r\n0\r\n*1\r\n$3\r\nfoo\r\n"])
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .compatible)
         #expect(log.recorded == [
@@ -70,7 +66,7 @@ struct CompatibilityProbeTests {
         let server = try scriptedServer(log, replies: [pong, "-ERR unknown command 'DBSIZE'\r\n", emptyPage])
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .incompatible(
             step: .dbSize,
@@ -84,7 +80,7 @@ struct CompatibilityProbeTests {
         let server = try scriptedServer(log, replies: [pong, zeroKeys, "-ERR invalid cursor\r\n"])
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .incompatible(
             step: .scan,
@@ -98,7 +94,7 @@ struct CompatibilityProbeTests {
         let server = try scriptedServer(log, replies: ["-NOAUTH Authentication required\r\n"])
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .incompatible(
             step: .ping,
@@ -121,7 +117,7 @@ struct CompatibilityProbeTests {
         let server = try scriptedServer(log, replies: replies)
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .incompatible(step: step, reason: .unexpectedReply(reply)))
     }
@@ -133,7 +129,7 @@ struct CompatibilityProbeTests {
         let server = try scriptedServer(log, replies: ["GARBAGE\r\n"])
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .protocolFailure(
             step: .ping,
@@ -149,7 +145,7 @@ struct CompatibilityProbeTests {
         }
         defer { server.stop() }
 
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
 
         #expect(outcome == .protocolFailure(step: .ping, reason: .connectionClosed))
         #expect(log.recorded == [[bytes("PING")]])
@@ -174,7 +170,7 @@ struct CompatibilityProbeTests {
         #expect(reported == budget)
         #expect(elapsed >= budget)
         #expect(elapsed < .seconds(5))
-        #expect(holder.isStillListening)
+        #expect(holder.acceptedPeerHungUp(within: .seconds(2)))
     }
 
     @Test func aServerThatFallsSilentMidProbeIsUnreachableNotAProtocolFailure() async throws {
@@ -200,7 +196,7 @@ struct CompatibilityProbeTests {
         let probe = CompatibilityProbe(budget: budget)
 
         let started = ContinuousClock.now
-        let outcome = try await probe.run(against: endpoint(server))
+        let outcome = try await probe.run(against: server.endpoint)
         let elapsed = ContinuousClock.now - started
 
         #expect(outcome == .unreachable(.timedOut(step: .scan, budget: budget)))

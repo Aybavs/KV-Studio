@@ -31,6 +31,29 @@ final class PortHolder: @unchecked Sendable {
         return named == 0 && UInt16(bigEndian: address.sin_port) == port
     }
 
+    // The probe's own connection is only observable from this side: accepting it lets a test see the
+    // peer hang up, which distinguishes a torn-down connection from a leaked one.
+    func acceptedPeerHungUp(within budget: Duration) -> Bool {
+        lock.lock()
+        let listening = closed ? -1 : descriptor
+        lock.unlock()
+        guard listening >= 0 else { return false }
+
+        var timeout = timeval(tv_sec: Int(budget.components.seconds), tv_usec: 0)
+        setsockopt(listening, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        let peer = accept(listening, nil, nil)
+        guard peer >= 0 else { return false }
+        defer { Darwin.close(peer) }
+
+        setsockopt(peer, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var scratch = [UInt8](repeating: 0, count: 64)
+        while true {
+            let read = Darwin.read(peer, &scratch, scratch.count)
+            if read == 0 { return true }
+            if read < 0 { return false }
+        }
+    }
+
     func close() {
         lock.lock()
         defer { lock.unlock() }

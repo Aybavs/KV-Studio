@@ -51,7 +51,11 @@ struct AppShellView: View {
     private var detailContent: some View {
         switch selection {
         case .browser:
-            BrowserPlaceholderView()
+            if isConnected {
+                BrowserPlaceholderView()
+            } else {
+                ConnectionOnboardingView(coordinator: coordinator, selection: $selection)
+            }
         case .console:
             ConsolePlaceholderView()
         case .server:
@@ -61,7 +65,11 @@ struct AppShellView: View {
         case .settings:
             SettingsPlaceholderView()
         case .none:
-            BrowserPlaceholderView()
+            if isConnected {
+                BrowserPlaceholderView()
+            } else {
+                ConnectionOnboardingView(coordinator: coordinator, selection: $selection)
+            }
         }
     }
 
@@ -81,6 +89,11 @@ struct AppShellView: View {
     }
 
     private var isHealthy: Bool {
+        if case .connected = coordinator.phase { return true }
+        return false
+    }
+
+    private var isConnected: Bool {
         if case .connected = coordinator.phase { return true }
         return false
     }

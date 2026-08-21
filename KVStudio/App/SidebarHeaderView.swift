@@ -7,7 +7,6 @@ struct SidebarHeaderView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("KV Studio")
                 .font(.headline)
-                .accessibilityIdentifier("app.title")
             HStack(spacing: 6) {
                 Circle()
                     .fill(state.isHealthy ? Color.green : Color.secondary)
@@ -25,6 +24,7 @@ struct SidebarHeaderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
         .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("app.title")
         .accessibilityLabel("KV Studio")
         .accessibilityValue("\(state.title), \(state.subtitle)")
     }

@@ -6,14 +6,14 @@ final class AppLaunchUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    // Matches on accessibility identifiers, not on displayed text: macOS does not reliably surface
-    // SwiftUI Text as an AX label here, and identifiers are what the app sets deliberately.
+    // Matches on identifier through `node(_:)`, not on element type: the sidebar header and the
+    // toolbar status are combined accessibility elements, not static text.
     func testAppLaunchesToItsConnectionScreen() {
         let app = XCUIApplication()
         app.launch()
 
         XCTAssertTrue(
-            app.staticTexts["app.title"].waitForExistence(timeout: 30),
+            app.node("app.title").waitForExistence(timeout: 30),
             "The sidebar header never appeared"
         )
         XCTAssertTrue(
@@ -21,7 +21,7 @@ final class AppLaunchUITests: XCTestCase {
             "The app did not land on its connection screen"
         )
         XCTAssertTrue(
-            app.staticTexts["toolbar.status"].exists,
+            app.node("toolbar.status").exists,
             "The toolbar status was not shown"
         )
     }

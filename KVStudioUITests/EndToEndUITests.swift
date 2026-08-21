@@ -1,10 +1,18 @@
 import Darwin
 import XCTest
 
+extension XCUIApplication {
+    /// Matches on identifier alone, whatever element type SwiftUI happened to produce.
+    func node(_ identifier: String) -> XCUIElement {
+        descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+}
+
 /// The nine scenarios the plan names, driven through the real app.
 ///
-/// Everything is matched by accessibility identifier rather than by displayed text: macOS does not
-/// reliably surface SwiftUI `Text` as an AX label, and identifiers are what the app sets on purpose.
+/// Everything is matched by accessibility identifier through `node(_:)` rather than by element type:
+/// how SwiftUI maps a view to an AX element is an implementation detail that has already changed
+/// under this suite once.
 ///
 /// Each test gets its own Application Support directory through `KV_STUDIO_SUPPORT_DIR`, so a run
 /// can never read or damage real user data, and scenarios cannot leak state into each other.
@@ -36,11 +44,12 @@ final class EndToEndUITests: XCTestCase {
 
     private func launchApp(backend: URL? = nil, extra: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
+        addTeardownBlock { app.terminate() }
         app.launchEnvironment["KV_STUDIO_SUPPORT_DIR"] = supportDirectory.path
         if let backend { app.launchEnvironment["KV_SERVER_BINARY"] = backend.path }
         for (key, value) in extra { app.launchEnvironment[key] = value }
         app.launch()
-        XCTAssertTrue(app.staticTexts["app.title"].waitForExistence(timeout: 30), "the app never presented its shell")
+        XCTAssertTrue(app.node("app.title").waitForExistence(timeout: 30), "the app never presented its shell")
         return app
     }
 
@@ -118,31 +127,41 @@ final class EndToEndUITests: XCTestCase {
 
     func testFirstLaunchCreateEditPreserveTTLAndDelete() throws {
         let binary = try backendBinary()
+        try usePreferredLocalPort(try freePort())
         let app = launchApp(backend: binary)
 
         app.buttons["connection.local.start"].click()
-        XCTAssertTrue(app.otherElements["browser.view"].waitForExistence(timeout: 60), "never reached the Browser")
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60), "never reached the Browser")
 
         app.buttons["browser.newKeyButton"].click()
-        XCTAssertTrue(app.otherElements["newKey.view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
         app.textFields["newKey.keyField"].click()
         app.textFields["newKey.keyField"].typeText("e2e:key")
         app.textViews["newKey.valueField"].click()
         app.textViews["newKey.valueField"].typeText("first")
+        // The preserve-TTL control only exists for a key that actually expires.
+        app.popUpButtons["newKey.expiryPicker"].click()
+        app.menuItems["Seconds"].click()
+        app.textFields["newKey.expiryValueField"].click()
+        app.textFields["newKey.expiryValueField"].typeText("600")
         app.buttons["newKey.createButton"].click()
 
-        let row = app.staticTexts["browser.row.e2e:key"]
+        let row = app.node("browser.row.e2e:key")
         XCTAssertTrue(row.waitForExistence(timeout: 15), "the created key never appeared")
         row.click()
-        XCTAssertTrue(app.staticTexts["browser.detail.loaded"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.node("browser.detail.loaded").waitForExistence(timeout: 10))
 
         // Editing with Preserve TTL on must not drop the remaining expiry.
-        let preserve = app.checkBoxes["browser.preserveTTLToggle"]
-        XCTAssertTrue(preserve.exists, "the preserve-TTL control is missing")
+        let preserve = app.switches["browser.preserveTTLToggle"]
+        XCTAssertTrue(preserve.waitForExistence(timeout: 10), "the preserve-TTL control is missing")
+        XCTAssertEqual(preserve.value as? String, "1", "preserve TTL should default to on for an expiring key")
         app.textViews["browser.editField"].click()
         app.textViews["browser.editField"].typeText("second")
         app.buttons["browser.saveButton"].click()
-        XCTAssertTrue(app.staticTexts["browser.detail.ttl"].waitForExistence(timeout: 10))
+
+        let ttl = app.node("browser.detail.ttl")
+        XCTAssertTrue(ttl.waitForExistence(timeout: 10))
+        XCTAssertNotEqual(ttl.value as? String, "No expiry", "saving with Preserve TTL on dropped the expiry")
 
         app.buttons["browser.deleteButton"].click()
         app.buttons["browser.delete.confirm"].click()
@@ -159,10 +178,10 @@ final class EndToEndUITests: XCTestCase {
         let app = launchApp()
         connectToExisting(app, port: port)
 
-        XCTAssertTrue(app.otherElements["browser.view"].waitForExistence(timeout: 60))
-        app.buttons["sidebar.server"].click()
-        XCTAssertTrue(app.otherElements["server.existingView"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["server.externalBadge"].exists, "an external server must be badged as external")
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60))
+        app.node("sidebar.server").click()
+        XCTAssertTrue(app.node("server.existingView").waitForExistence(timeout: 10))
+        XCTAssertTrue(app.node("server.externalBadge").exists, "an external server must be badged as external")
     }
 
     // MARK: - 3. An incompatible old server
@@ -183,8 +202,8 @@ final class EndToEndUITests: XCTestCase {
         let app = launchApp()
         connectToExisting(app, port: port)
 
-        XCTAssertTrue(app.staticTexts["connection.error"].waitForExistence(timeout: 30), "no compatibility error was shown")
-        XCTAssertFalse(app.otherElements["browser.view"].exists, "an incompatible server must not reach the Browser")
+        XCTAssertTrue(app.node("connection.error").waitForExistence(timeout: 30), "no compatibility error was shown")
+        XCTAssertFalse(app.node("browser.view").exists, "an incompatible server must not reach the Browser")
     }
 
     // MARK: - 4. A binary value is shown as hex
@@ -196,22 +215,22 @@ final class EndToEndUITests: XCTestCase {
 
         let app = launchApp()
         connectToExisting(app, port: port)
-        XCTAssertTrue(app.otherElements["browser.view"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60))
 
         app.buttons["browser.newKeyButton"].click()
-        XCTAssertTrue(app.otherElements["newKey.view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
         app.textFields["newKey.keyField"].click()
         app.textFields["newKey.keyField"].typeText("e2e:binary")
-        app.radioButtons["newKey.valueModePicker"].buttons.element(boundBy: 1).click()
+        app.radioGroups["newKey.valueModePicker"].radioButtons["Hex"].click()
         app.textViews["newKey.valueField"].click()
         app.textViews["newKey.valueField"].typeText("00ff10")
         app.buttons["newKey.createButton"].click()
 
-        let row = app.staticTexts["browser.row.e2e:binary"]
+        let row = app.node("browser.row.e2e:binary")
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         row.click()
         // Auto mode must land on Hex by itself for bytes that are not text.
-        XCTAssertTrue(app.staticTexts["valueViewer.hex"].waitForExistence(timeout: 10), "binary value did not display as hex")
+        XCTAssertTrue(app.node("valueViewer.hex").waitForExistence(timeout: 10), "binary value did not display as hex")
     }
 
     // MARK: - 5. Search runs server-side
@@ -223,52 +242,53 @@ final class EndToEndUITests: XCTestCase {
 
         let app = launchApp()
         connectToExisting(app, port: port)
-        XCTAssertTrue(app.otherElements["browser.view"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60))
 
         for name in ["alpha:1", "beta:1"] {
             app.buttons["browser.newKeyButton"].click()
-            XCTAssertTrue(app.otherElements["newKey.view"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
             app.textFields["newKey.keyField"].click()
             app.textFields["newKey.keyField"].typeText(name)
             app.textViews["newKey.valueField"].click()
             app.textViews["newKey.valueField"].typeText("v")
             app.buttons["newKey.createButton"].click()
-            XCTAssertTrue(app.staticTexts["browser.row.\(name)"].waitForExistence(timeout: 15))
+            XCTAssertTrue(app.node("browser.row.\(name)").waitForExistence(timeout: 15))
         }
 
-        let search = app.searchFields["browser.searchField"]
+        let search = app.textFields["browser.searchField"]
         search.click()
         search.typeText("alpha")
 
-        XCTAssertTrue(app.staticTexts["browser.row.alpha:1"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["browser.row.beta:1"].waitForNonExistence(timeout: 15), "search did not filter")
+        XCTAssertTrue(app.node("browser.row.alpha:1").waitForExistence(timeout: 15))
+        XCTAssertTrue(app.node("browser.row.beta:1").waitForNonExistence(timeout: 15), "search did not filter")
     }
 
     // MARK: - 6. A managed restart keeps AOF data
 
     func testManagedServerRestartKeepsData() throws {
         let binary = try backendBinary()
+        try usePreferredLocalPort(try freePort())
         let app = launchApp(backend: binary)
 
         app.buttons["connection.local.start"].click()
-        XCTAssertTrue(app.otherElements["browser.view"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60))
 
         app.buttons["browser.newKeyButton"].click()
-        XCTAssertTrue(app.otherElements["newKey.view"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
         app.textFields["newKey.keyField"].click()
         app.textFields["newKey.keyField"].typeText("e2e:durable")
         app.textViews["newKey.valueField"].click()
         app.textViews["newKey.valueField"].typeText("survives")
         app.buttons["newKey.createButton"].click()
-        XCTAssertTrue(app.staticTexts["browser.row.e2e:durable"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.node("browser.row.e2e:durable").waitForExistence(timeout: 15))
 
-        app.buttons["sidebar.server"].click()
-        XCTAssertTrue(app.otherElements["server.managedView"].waitForExistence(timeout: 10))
+        app.node("sidebar.server").click()
+        XCTAssertTrue(app.node("server.managedView").waitForExistence(timeout: 10))
         app.buttons["server.restartButton"].click()
 
-        app.buttons["sidebar.browser"].click()
+        app.node("sidebar.browser").click()
         XCTAssertTrue(
-            app.staticTexts["browser.row.e2e:durable"].waitForExistence(timeout: 60),
+            app.node("browser.row.e2e:durable").waitForExistence(timeout: 60),
             "the key did not survive a managed restart, so the append-only file was not replayed"
         )
     }
@@ -277,10 +297,11 @@ final class EndToEndUITests: XCTestCase {
 
     func testQuittingStopsTheManagedBackend() throws {
         let binary = try backendBinary()
+        try usePreferredLocalPort(try freePort())
         let app = launchApp(backend: binary)
 
         app.buttons["connection.local.start"].click()
-        XCTAssertTrue(app.otherElements["browser.view"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60))
 
         let record = supportDirectory.appendingPathComponent("state/managed-server.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: record.path), "no managed server was recorded")
@@ -313,7 +334,7 @@ final class EndToEndUITests: XCTestCase {
         let app = launchApp(backend: binary)
         app.buttons["connection.local.start"].click()
 
-        XCTAssertTrue(app.staticTexts["connection.error"].waitForExistence(timeout: 60), "no port conflict was reported")
+        XCTAssertTrue(app.node("connection.error").waitForExistence(timeout: 60), "no port conflict was reported")
         XCTAssertTrue(squatter.isRunning, "KV Studio must never kill a server it does not own")
     }
 
@@ -339,12 +360,12 @@ final class EndToEndUITests: XCTestCase {
             .write(to: staging.appendingPathComponent("metadata.json"))
 
         let app = launchApp()
-        app.buttons["sidebar.settings"].click()
-        XCTAssertTrue(app.otherElements["settings.view"].waitForExistence(timeout: 15))
+        app.node("sidebar.settings").click()
+        XCTAssertTrue(app.node("settings.view").waitForExistence(timeout: 15))
 
         // The staged backend is activated at launch; a broken one must be rolled back, leaving the
         // working 1.1.0 installed rather than the 9.9.9 that could not start.
-        let installed = app.staticTexts["settings.installedVersion"]
+        let installed = app.node("settings.installedVersion")
         XCTAssertTrue(installed.waitForExistence(timeout: 30))
         let restored = current.appendingPathComponent("metadata.json")
         let json = try JSONSerialization.jsonObject(with: try Data(contentsOf: restored)) as? [String: Any]

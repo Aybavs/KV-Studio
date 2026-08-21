@@ -18,9 +18,11 @@ struct ServerView: View {
         Group {
             if viewModel.isManaged {
                 managedView
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("server.managedView")
             } else {
                 existingView
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("server.existingView")
             }
         }
@@ -62,6 +64,7 @@ struct ServerView: View {
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 1))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("server.statusCard")
     }
 
@@ -80,6 +83,7 @@ struct ServerView: View {
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 1))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("server.pathsCard")
     }
 
@@ -124,6 +128,7 @@ struct ServerView: View {
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 1))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("server.controlsCard")
     }
 
@@ -148,6 +153,7 @@ struct ServerView: View {
                 .padding(16)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 1))
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("server.existingCard")
             }
             .padding(24)

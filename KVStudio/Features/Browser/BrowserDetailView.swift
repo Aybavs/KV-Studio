@@ -82,6 +82,7 @@ struct BrowserDetailView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             ValueViewer(data: value)
+                                .accessibilityElement(children: .contain)
                                 .accessibilityIdentifier("browser.detail.value")
                             Text("\(value.count) bytes")
                                 .font(.caption2)

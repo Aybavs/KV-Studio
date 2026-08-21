@@ -39,6 +39,7 @@ struct LogsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("logs.view")
     }
 

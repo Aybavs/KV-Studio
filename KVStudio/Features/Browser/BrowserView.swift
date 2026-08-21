@@ -93,6 +93,7 @@ struct BrowserView: View {
                     .accessibilityIdentifier("browser.delete.preview")
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("browser.view")
         .background {
             // Hidden focus trigger for Cmd+F
@@ -268,6 +269,7 @@ struct BrowserView: View {
                         .accessibilityIdentifier("browser.empty.newKeyButton")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("browser.empty.db")
             } else if viewModel.isShowingNoResults {
                 VStack(spacing: 10) {
@@ -294,6 +296,7 @@ struct BrowserView: View {
                     .accessibilityIdentifier("browser.empty.clearSearchButton")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("browser.empty.search")
             } else {
                 // Fallback empty (covers edge where state not loaded yet)

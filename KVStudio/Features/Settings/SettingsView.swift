@@ -63,6 +63,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 600)
         .padding()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.view")
     }
 }

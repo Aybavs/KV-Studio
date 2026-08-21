@@ -74,7 +74,6 @@ struct ConnectionOnboardingView: View {
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 1))
-        .accessibilityIdentifier("connection.card.local")
     }
 
     private var existingCard: some View {
@@ -129,7 +128,6 @@ struct ConnectionOnboardingView: View {
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 1))
-        .accessibilityIdentifier("connection.card.existing")
     }
 
     private var statusArea: some View {

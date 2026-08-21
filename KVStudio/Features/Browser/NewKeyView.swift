@@ -128,6 +128,7 @@ struct NewKeyView: View {
             footer
         }
         .frame(minWidth: 420, minHeight: 520)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("newKey.view")
     }
 

@@ -2,8 +2,16 @@ import XCTest
 
 @MainActor
 final class AppLaunchUITests: XCTestCase {
-    override func setUp() {
+    override func setUpWithError() throws {
         continueAfterFailure = false
+        let running = XCUIApplication()
+        if running.state != .notRunning {
+            _ = running.wait(for: .notRunning, timeout: 10)
+        }
+        try XCTSkipUnless(
+            running.state == .notRunning,
+            "A KV Studio instance is already running; stop it, including an Xcode Run session, since a debugger-attached app refuses termination."
+        )
     }
 
     // Matches on identifier through `node(_:)`, not on element type: the sidebar header and the

@@ -27,6 +27,17 @@ final class EndToEndUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // An instance the runner did not launch cannot be terminated if a debugger holds it, and
+        // every launch afterwards drives that app instead of a configured one. Say so in one second
+        // rather than through nine tests of timeouts.
+        let running = XCUIApplication()
+        if running.state != .notRunning {
+            _ = running.wait(for: .notRunning, timeout: 10)
+        }
+        try XCTSkipUnless(
+            running.state == .notRunning,
+            "A KV Studio instance is already running; stop it, including an Xcode Run session, since a debugger-attached app refuses termination."
+        )
         supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("kv-e2e-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
@@ -49,6 +60,14 @@ final class EndToEndUITests: XCTestCase {
         if let backend { app.launchEnvironment["KV_SERVER_BINARY"] = backend.path }
         for (key, value) in extra { app.launchEnvironment[key] = value }
         app.launch()
+        // Each run costs minutes of someone's screen, so a failure carries the tree that caused it.
+        addTeardownBlock { [weak self] in
+            guard (self?.testRun?.failureCount ?? 0) > 0 else { return }
+            let attachment = XCTAttachment(string: app.debugDescription)
+            attachment.name = "accessibility-tree-at-failure"
+            attachment.lifetime = .keepAlways
+            self?.add(attachment)
+        }
         XCTAssertTrue(app.node("app.title").waitForExistence(timeout: 30), "the app never presented its shell")
         return app
     }

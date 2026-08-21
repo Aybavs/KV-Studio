@@ -178,13 +178,12 @@ struct NewKeyView: View {
                 let data = try ValuePresentation.data(fromHex: keyText)
                 if data.isEmpty { return "Key must not be empty" }
                 return nil
-            } catch let err as ValuePresentation.HexParseError {
-                switch err {
+            } catch {
+                // data(fromHex:) uses typed throws, so these are the only two outcomes.
+                switch error {
                 case .oddLength: return "Invalid hex: odd number of hex digits"
                 case .invalidCharacter: return "Invalid hex: contains non-hex character"
                 }
-            } catch {
-                return "Invalid hex"
             }
         }
     }
@@ -196,13 +195,12 @@ struct NewKeyView: View {
             do {
                 _ = try ValuePresentation.data(fromHex: valueText)
                 return nil
-            } catch let err as ValuePresentation.HexParseError {
-                switch err {
+            } catch {
+                // data(fromHex:) uses typed throws, so these are the only two outcomes.
+                switch error {
                 case .oddLength: return "Invalid hex: odd number of hex digits"
                 case .invalidCharacter: return "Invalid hex: contains non-hex character"
                 }
-            } catch {
-                return "Invalid hex"
             }
         }
     }

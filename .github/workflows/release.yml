@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Every signing input is a secret this repository does not have yet. Each step that needs one
+# checks for it and fails with a named message rather than producing an unsigned artifact that
+# looks releasable.
+env:
+  PROJECT: KVStudio.xcodeproj
+  SCHEME: KVStudio
+  APP_NAME: KV Studio
+
+jobs:
+  release:
+    name: Build, sign, notarize
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report toolchain
+        run: xcodebuild -version
+
+      - name: Require signing secrets
+        run: |
+          missing=""
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
+                      NOTARY_APPLE_ID NOTARY_TEAM_ID NOTARY_PASSWORD SPARKLE_PRIVATE_KEY; do
+            eval "value=\${$name}"
+            [ -z "$value" ] && missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::release is not configured; missing secrets:$missing"
+            exit 1
+          fi
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/build.keychain"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # The app ships both darwin backends so a single download works on either architecture.
+      - name: Read the backend version this Studio bundles
+        id: policy
+        run: echo "bundled=$(python3 -c "import json;print(json.load(open('KVStudio/Resources/BackendPolicy.json'))['bundledBackend'])")" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch and verify both backend architectures
+        run: |
+          version="${{ steps.policy.outputs.bundled }}"
+          base="https://github.com/Aybavs/go-kv-store/releases/download/v$version"
+          mkdir -p "$RUNNER_TEMP/backend" && cd "$RUNNER_TEMP/backend"
+          curl -fsSL -O "$base/SHA256SUMS"
+          for arch in arm64 amd64; do curl -fsSL -O "$base/kv-server_v${version}_darwin_${arch}.tar.gz"; done
+          # Verify before unpacking, the same order the app itself uses.
+          grep darwin SHA256SUMS > darwin.sums
+          shasum -a 256 -c darwin.sums
+          for arch in arm64 amd64; do
+            tar -xzf "kv-server_v${version}_darwin_${arch}.tar.gz" "kv-server_v${version}_darwin_${arch}/kv-server"
+            mv "kv-server_v${version}_darwin_${arch}/kv-server" "kv-server-darwin-$arch"
+          done
+
+      - name: Build (Release)
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/KVStudio.xcarchive" \
+            CODE_SIGN_IDENTITY="${{ secrets.MACOS_SIGNING_IDENTITY }}" \
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime"
+
+      - name: Sign nested executables, then the app
+        env:
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          app="$RUNNER_TEMP/KVStudio.xcarchive/Products/Applications/$APP_NAME.app"
+          # Nested code must be signed before the enclosing app, innermost first.
+          find "$app/Contents/Frameworks" -name "*.framework" -maxdepth 1 -print0 2>/dev/null |
+            xargs -0 -I{} codesign --force --timestamp --options=runtime --sign "$IDENTITY" {}
+          find "$app/Contents/Resources/backend" -type f -perm -u+x -print0 2>/dev/null |
+            xargs -0 -I{} codesign --force --timestamp --options=runtime --sign "$IDENTITY" {}
+          codesign --force --timestamp --options=runtime --sign "$IDENTITY" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+      - name: Build DMG
+        run: |
+          app="$RUNNER_TEMP/KVStudio.xcarchive/Products/Applications/$APP_NAME.app"
+          staging="$RUNNER_TEMP/dmg" && mkdir -p "$staging"
+          cp -R "$app" "$staging/"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname "$APP_NAME" -srcfolder "$staging" -ov -format UDZO "$RUNNER_TEMP/KVStudio.dmg"
+          codesign --force --timestamp --sign "${{ secrets.MACOS_SIGNING_IDENTITY }}" "$RUNNER_TEMP/KVStudio.dmg"
+
+      - name: Notarize and staple
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          xcrun notarytool submit "$RUNNER_TEMP/KVStudio.dmg" \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
+            --wait
+          xcrun stapler staple "$RUNNER_TEMP/KVStudio.dmg"
+          xcrun stapler validate "$RUNNER_TEMP/KVStudio.dmg"
+
+      # A notarized, stapled DMG is what a machine that has never seen this developer will accept.
+      - name: Verify the artifact the way a clean machine would
+        run: |
+          mount=$(hdiutil attach "$RUNNER_TEMP/KVStudio.dmg" -nobrowse -readonly | tail -1 | awk '{print $NF}')
+          spctl --assess --type execute --verbose=4 "$mount/$APP_NAME.app"
+          codesign --verify --deep --strict --verbose=2 "$mount/$APP_NAME.app"
+          hdiutil detach "$mount"
+
+      - name: Sign the Sparkle appcast entry
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          tool=$(find ~/Library/Developer/Xcode/DerivedData -name sign_update -type f 2>/dev/null | head -1)
+          if [ -z "$tool" ]; then echo "::error::Sparkle's sign_update tool was not found in the resolved package"; exit 1; fi
+          echo "$SPARKLE_PRIVATE_KEY" | "$tool" --ed-key-file - "$RUNNER_TEMP/KVStudio.dmg" | tee "$RUNNER_TEMP/appcast-signature.txt"
+
+      - name: Checksums
+        run: shasum -a 256 "$RUNNER_TEMP/KVStudio.dmg" | tee "$RUNNER_TEMP/SHA256SUMS"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kv-studio-release
+          path: |
+            ${{ runner.temp }}/KVStudio.dmg
+            ${{ runner.temp }}/SHA256SUMS
+            ${{ runner.temp }}/appcast-signature.txt

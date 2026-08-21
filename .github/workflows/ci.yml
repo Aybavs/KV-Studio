@@ -9,6 +9,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Both suites share these; the UI suite is deliberately absent, see the note in its job.
+  PROJECT: KVStudio.xcodeproj
+  SCHEME: KVStudio
+
 jobs:
   build-and-test:
     name: Build and test
@@ -16,22 +21,76 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -switch /Applications/Xcode_16.app
+      # Pinning a specific Xcode.app path breaks whenever the runner image moves; report what we
+      # got instead, and fail loudly if it is too old for the project's Swift 6 / objectVersion 77.
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodebuild -version | awk '/^Xcode/ { split($2, v, "."); if (v[1] < 16) { print "::error::Xcode " $2 " is too old; this project needs 16 or newer"; exit 1 } }'
 
-      - name: Build (Debug)
+      - name: Build (Debug, warnings as errors)
         run: |
           xcodebuild build \
-            -project KVStudio.xcodeproj \
-            -scheme KVStudio \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
       - name: Unit tests
         run: |
           xcodebuild test \
-            -project KVStudio.xcodeproj \
-            -scheme KVStudio \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Debug \
             -only-testing:KVStudioTests \
             CODE_SIGNING_ALLOWED=NO
+
+  integration:
+    name: Integration against go-kv-store
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the backend floor this Studio requires
+        id: policy
+        run: echo "minimum=$(python3 -c "import json;print(json.load(open('KVStudio/Resources/BackendPolicy.json'))['minimumBackend'])")" >> "$GITHUB_OUTPUT"
+
+      # The integration suites skip themselves when no binary is present, so building the matching
+      # backend is what makes them actually run rather than silently pass.
+      - name: Check out the matching go-kv-store
+        uses: actions/checkout@v4
+        with:
+          repository: Aybavs/go-kv-store
+          ref: v${{ steps.policy.outputs.minimum }}
+          path: .backend-src
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .backend-src/go.mod
+          cache-dependency-path: .backend-src/go.sum
+
+      - name: Build kv-server
+        run: |
+          mkdir -p .build
+          (cd .backend-src && go build -o "$GITHUB_WORKSPACE/.build/kv-server" ./cmd/kv-server)
+          .build/kv-server --help 2>&1 | head -3 || true
+
+      - name: Integration tests
+        run: |
+          xcodebuild test \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -only-testing:KVStudioTests/LiveBackendTests \
+            -only-testing:KVStudioTests/ManagedServerLiveTests \
+            -only-testing:KVStudioTests/CompatibilityProbeLiveTests \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: No leaked server or fixture processes
+        if: always()
+        run: |
+          leaked=$(pgrep -fl 'kv-server|kv-fixtures' || true)
+          if [ -n "$leaked" ]; then echo "::error::test run leaked processes:"; echo "$leaked"; exit 1; fi

@@ -27,14 +27,14 @@ enum NewKeyExpiry: Equatable, Sendable {
     }
 
     static func from(amountText: String, unit: ExpiryUnit) -> NewKeyExpiry? {
-        if unit == .none { return .none }
+        if unit == .none { return NewKeyExpiry.none }
         let trimmed = amountText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let value = Int64(trimmed), value > 0 else { return nil }
         switch unit {
         case .seconds: return .seconds(value)
         case .minutes: return .minutes(value)
         case .hours: return .hours(value)
-        case .none: return .none
+        case .none: return NewKeyExpiry.none
         }
     }
 }

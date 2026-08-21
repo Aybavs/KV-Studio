@@ -39,6 +39,7 @@ struct AppShellView: View {
                 ForEach(AppRoute.routes(in: .browse), id: \.self) { route in
                     Label(route.title, systemImage: route.systemImage)
                         .tag(route)
+                        .accessibilityIdentifier("sidebar.\(route.rawValue)")
                 }
             }
 
@@ -46,12 +47,14 @@ struct AppShellView: View {
                 ForEach(AppRoute.routes(in: .manage), id: \.self) { route in
                     Label(route.title, systemImage: route.systemImage)
                         .tag(route)
+                        .accessibilityIdentifier("sidebar.\(route.rawValue)")
                 }
             }
 
             Section {
                 Label(AppRoute.settings.title, systemImage: AppRoute.settings.systemImage)
                     .tag(AppRoute.settings)
+                    .accessibilityIdentifier("sidebar.settings")
             }
         }
         .listStyle(.sidebar)

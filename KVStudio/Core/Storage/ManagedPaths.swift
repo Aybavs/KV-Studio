@@ -28,7 +28,14 @@ struct ManagedPaths: Sendable {
         }
     }
 
-    static func resolveDefault() throws -> ManagedPaths {
+    // End-to-end tests need their own storage so a run cannot read or damage real user data. The
+    // override is environment-only, so a shipped app never takes it from a document or a URL.
+    static let supportDirectoryOverrideKey = "KV_STUDIO_SUPPORT_DIR"
+
+    static func resolveDefault(environment: [String: String] = ProcessInfo.processInfo.environment) throws -> ManagedPaths {
+        if let override = environment[supportDirectoryOverrideKey], !override.isEmpty {
+            return ManagedPaths(root: URL(fileURLWithPath: override, isDirectory: true))
+        }
         let appSupport = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,

@@ -7,12 +7,12 @@ import Testing
 struct ManagedServerControllerTests {
 
     private let timeouts = ManagedServerTimeouts(
-        readiness: .seconds(2),
+        readiness: TestPacing.scaled(.seconds(2)),
         readinessPoll: .milliseconds(20),
-        probe: .milliseconds(400),
-        gracefulShutdown: .milliseconds(500),
-        forcedShutdown: .seconds(2),
-        outputDrain: .milliseconds(500),
+        probe: TestPacing.scaled(.milliseconds(400)),
+        gracefulShutdown: TestPacing.scaled(.milliseconds(500)),
+        forcedShutdown: TestPacing.scaled(.seconds(2)),
+        outputDrain: TestPacing.scaled(.milliseconds(500)),
         exitPoll: .milliseconds(50)
     )
 

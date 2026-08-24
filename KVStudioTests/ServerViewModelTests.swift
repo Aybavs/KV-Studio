@@ -15,12 +15,6 @@ struct ServerViewModelManagedTests {
         return paths
     }
 
-    private func makeCoordinator(paths: ManagedPaths, managedStatus: ManagedServerStatus = .idle, phase: ConnectionPhase = .disconnected, endpoint: ConnectionEndpoint = ConnectionEndpoint(host: "127.0.0.1", port: 6380)) throws -> ConnectionCoordinator {
-        // Use stub server to control managed status via coordinator's published state?
-        // Instead we directly craft coordinator and then set via reflection? We test static helpers.
-        return ConnectionCoordinator(paths: paths, server: StubServerForViewModel())
-    }
-
     @Test func managedIsTrueWhenDisconnected() {
         #expect(ServerViewModel.isManaged(phase: .disconnected) == true)
     }

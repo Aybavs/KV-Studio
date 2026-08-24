@@ -329,7 +329,6 @@ struct BrowserView: View {
             if case .loaded(let key, let value, let ttl) = viewModel.detailState {
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
-                    // Preserve TTL toggle (charcoal/purple theme, monospace TTL already in detail)
                     if case .expiring = ttl {
                         Toggle(isOn: $viewModel.preserveTTL) {
                             Text("Preserve TTL")
@@ -338,7 +337,6 @@ struct BrowserView: View {
                         .toggleStyle(.switch)
                         .accessibilityIdentifier("browser.preserveTTLToggle")
                     }
-                    // Editable value field – monospace, charcoal
                     if ValuePresentation.isValidUTF8(value) {
                         Text("Edit Value")
                             .font(.caption.weight(.semibold).monospaced())

@@ -68,6 +68,27 @@ For a development backend:
 ./scripts/install-dev-backend.sh   # installs one where the app looks for it
 ```
 
+### Tests
+
+The unit and integration suites are a plain `xcodebuild` call. Several of them start a real
+`kv-server`, so build the test backend above first or they skip themselves.
+
+```bash
+xcodebuild test -project KVStudio.xcodeproj -scheme KVStudio -configuration Debug -only-testing:KVStudioTests
+```
+
+The end-to-end suite has to go through its script:
+
+```bash
+./scripts/run-ui-tests.sh
+```
+
+Xcode signs the UI-test runner from its own template, which sandboxes it without permission to
+listen. Five scenarios start a server of their own, and both the runner and everything it spawns
+are refused, so the script re-signs the runner between building and running. Quit any Xcode Run
+session first: a debugger-attached app cannot be replaced by the runner, and the suite stops with
+that reason rather than working around it.
+
 ## Updates
 
 Nothing installs itself. KV Studio checks when you ask it to (and on launch, if you leave that on in

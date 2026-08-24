@@ -50,6 +50,20 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
+      # Temporary: lengths only, never values. An app-specific password is 19 characters and a
+      # team id is 10; anything else says which secret is wrong without printing any of them.
+      - name: Measure the notarization inputs
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          for name in NOTARY_APPLE_ID NOTARY_TEAM_ID NOTARY_PASSWORD; do
+            eval "value=\${$name}"
+            bare=$(printf '%s' "$value" | tr -d '[:space:]')
+            printf '%s: %d characters, %d once whitespace is removed\n' "$name" "${#value}" "${#bare}"
+          done
+
       - name: Import signing certificate
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}

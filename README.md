@@ -117,3 +117,9 @@ See [docs/updater.md](docs/updater.md) for the full flow and what happens when a
 - [Updater and rollback](docs/updater.md)
 - [Privacy and security](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
+
+## License
+
+MIT — see [LICENSE](LICENSE). The bundled `kv-server` comes from
+[`go-kv-store`](https://github.com/Aybavs/go-kv-store), which is MIT as well; Sparkle is under its
+own MIT-style licence.

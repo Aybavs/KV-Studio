@@ -6,7 +6,7 @@ A native macOS client and control plane for
 Browse keys, inspect binary-safe values, run commands, manage a local `kv-server`, and watch its
 logs — from one native Swift application.
 
-![KV Studio browsing a key and inspecting its value](docs/images/value-inspector.png)
+![Connecting to a local server, searching keys, and inspecting a value](docs/images/demo.gif)
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-333333)
 ![Swift 6](https://img.shields.io/badge/Swift-6-F05138)
@@ -91,6 +91,10 @@ it is not, so no byte is lost to a replacement character. Keys can be created in
 - Disconnect closes the connection and leaves the server running
 
 ## Screenshots
+
+### Value inspector
+
+![A JSON value, formatted, with its byte count and TTL](docs/images/value-inspector.png)
 
 ### Key browser
 

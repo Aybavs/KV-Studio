@@ -157,7 +157,11 @@ jobs:
       # A notarized, stapled DMG is what a machine that has never seen this developer will accept.
       - name: Verify the artifact the way a clean machine would
         run: |
-          mount=$(hdiutil attach "$RUNNER_TEMP/KVStudio.dmg" -nobrowse -readonly | tail -1 | awk '{print $NF}')
+          # hdiutil separates its columns with tabs, and the volume is "KV Studio": splitting on
+          # whitespace takes the mount point apart at the space and looks for Studio/KV Studio.app.
+          mount=$(hdiutil attach "$RUNNER_TEMP/KVStudio.dmg" -nobrowse -readonly |
+            awk -F'\t' '/\/Volumes\//{ print $NF; exit }')
+          [ -d "$mount" ] || { echo "::error::could not find where the disk image mounted"; exit 1; }
           spctl --assess --type execute --verbose=4 "$mount/$APP_NAME.app"
           codesign --verify --deep --strict --verbose=2 "$mount/$APP_NAME.app"
           hdiutil detach "$mount"

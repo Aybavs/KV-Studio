@@ -17,6 +17,9 @@ jobs:
   release:
     name: Build, sign, notarize
     runs-on: macos-15
+    # Creating the release is the only write this workflow makes.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -134,15 +137,64 @@ jobs:
           hdiutil detach "$mount"
 
       - name: Sign the Sparkle appcast entry
+        id: sign
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           tool=$(find ~/Library/Developer/Xcode/DerivedData -name sign_update -type f 2>/dev/null | head -1)
           if [ -z "$tool" ]; then echo "::error::Sparkle's sign_update tool was not found in the resolved package"; exit 1; fi
-          echo "$SPARKLE_PRIVATE_KEY" | "$tool" --ed-key-file - "$RUNNER_TEMP/KVStudio.dmg" | tee "$RUNNER_TEMP/appcast-signature.txt"
+          # sign_update prints the enclosure attributes ready to paste: edSignature and length.
+          attributes=$(echo "$SPARKLE_PRIVATE_KEY" | "$tool" --ed-key-file - "$RUNNER_TEMP/KVStudio.dmg")
+          echo "attributes=$attributes" >> "$GITHUB_OUTPUT"
+
+      # Sparkle reads this, not the release page. Without it a signed DMG is still a download
+      # nobody's copy of the app can find.
+      - name: Write the appcast
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" \
+            "$RUNNER_TEMP/KVStudio.xcarchive/Products/Applications/$APP_NAME.app/Contents/Info.plist")
+          minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" \
+            "$RUNNER_TEMP/KVStudio.xcarchive/Products/Applications/$APP_NAME.app/Contents/Info.plist")
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/KVStudio.dmg"
+          cat > "$RUNNER_TEMP/appcast.xml" <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>KV Studio</title>
+              <link>https://github.com/${GITHUB_REPOSITORY}</link>
+              <description>Updates for KV Studio</description>
+              <language>en</language>
+              <item>
+                <title>${version}</title>
+                <pubDate>$(date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
+                <sparkle:version>${build}</sparkle:version>
+                <sparkle:shortVersionString>${version}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>${minimum}</sparkle:minimumSystemVersion>
+                <sparkle:releaseNotesLink>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}</sparkle:releaseNotesLink>
+                <enclosure url="${url}" type="application/octet-stream" ${{ steps.sign.outputs.attributes }} />
+              </item>
+            </channel>
+          </rss>
+          XML
+          # The heredoc is indented for readability; the file must not be.
+          sed -i '' 's/^          //' "$RUNNER_TEMP/appcast.xml"
+          xmllint --noout "$RUNNER_TEMP/appcast.xml"
 
       - name: Checksums
         run: shasum -a 256 "$RUNNER_TEMP/KVStudio.dmg" | tee "$RUNNER_TEMP/SHA256SUMS"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$RUNNER_TEMP/KVStudio.dmg" \
+            "$RUNNER_TEMP/SHA256SUMS" \
+            "$RUNNER_TEMP/appcast.xml"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -150,4 +202,4 @@ jobs:
           path: |
             ${{ runner.temp }}/KVStudio.dmg
             ${{ runner.temp }}/SHA256SUMS
-            ${{ runner.temp }}/appcast-signature.txt
+            ${{ runner.temp }}/appcast.xml

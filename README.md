@@ -16,7 +16,7 @@ logs — from one native Swift application.
 ## Install
 
 Download the notarized `.dmg` from the [latest release](https://github.com/Aybavs/KV-Studio/releases/latest)
-and drag KV Studio to Applications. A `kv-server` is bundled, so **Start Local Server** works with
+and drag KV Studio to Applications. A `kv-server` 1.2.0 is bundled, so **Start Local Server** works with
 nothing else installed.
 
 ## Features
@@ -103,6 +103,10 @@ it is not, so no byte is lost to a replacement character. Keys can be created in
 ### Hex viewer
 
 ![A binary value shown as a hex dump](docs/images/hex-viewer.png)
+
+### Console
+
+![RESP2 replies rendered by shape: simple string, integer, bulk string and array](docs/images/console.png)
 
 ### Server management
 

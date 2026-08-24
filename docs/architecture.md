@@ -60,10 +60,14 @@ Because a connection is serialized, the Browser and the Console get **separate**
 
 ## Compatibility
 
-There is no `VERSION` command, so compatibility is decided by capability: `PING`, then `DBSIZE`,
-then `SCAN 0 COUNT 1`. Failures are classified by the server's documented error *class prefix*, never
-by exact wording. A go-kv-store 1.0.x answers `PING` and then rejects `DBSIZE` — that is the exact
+Compatibility is decided by capability rather than by a version string: `PING`, then `DBSIZE`, then
+`SCAN 0 COUNT 1`. Failures are classified by the server's documented error *class prefix*, never by
+exact wording. A go-kv-store 1.0.x answers `PING` and then rejects `DBSIZE` — that is the exact
 signature the 1.1.0 floor is enforced by.
+
+`VERSION` exists from go-kv-store 1.2.0 onward, and the Server screen shows what a server answers,
+but it is not what admits one: the floor is 1.1.0, which predates the command. A server is asked
+whether it can do the work before it is asked to name itself.
 
 A consequence worth stating: a server that answers all three may connect even if it is not
 go-kv-store. That is the compatibility model the product chose, not an oversight.

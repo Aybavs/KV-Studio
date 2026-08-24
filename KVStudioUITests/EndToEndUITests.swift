@@ -26,11 +26,13 @@ final class EndToEndUITests: XCTestCase {
 
     private var supportDirectory: URL!
 
-    override func setUpWithError() throws {
+    // The async hook, not setUpWithError: XCTest declares that one nonisolated, and reaching
+    // main-actor state from it compiles here but not on the Xcode CI runs with.
+    override func setUp() async throws {
         continueAfterFailure = false
         // An instance the runner did not launch cannot be terminated if a debugger holds it, and
-        // every launch afterwards drives that app instead of a configured one. Say so in one second
-        // rather than through nine tests of timeouts.
+        // every launch afterwards drives that app instead of a configured one. Say so in one
+        // second rather than through nine tests of timeouts.
         let running = XCUIApplication()
         if running.state != .notRunning {
             _ = running.wait(for: .notRunning, timeout: 10)
@@ -44,7 +46,7 @@ final class EndToEndUITests: XCTestCase {
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         for process in spawned { process.terminate() }
         spawned.removeAll()
         try? FileManager.default.removeItem(at: supportDirectory)

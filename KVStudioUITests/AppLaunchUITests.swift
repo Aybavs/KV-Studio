@@ -2,7 +2,9 @@ import XCTest
 
 @MainActor
 final class AppLaunchUITests: XCTestCase {
-    override func setUpWithError() throws {
+    // The async hook, not setUpWithError: XCTest declares that one nonisolated, and reaching
+    // main-actor state from it compiles here but not on the Xcode CI runs with.
+    override func setUp() async throws {
         continueAfterFailure = false
         let running = XCUIApplication()
         if running.state != .notRunning {

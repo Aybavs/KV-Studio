@@ -102,7 +102,7 @@ start or fails its compatibility probe is rolled back to the previous one automa
 
 See [docs/updater.md](docs/updater.md) for the full flow and what happens when a step fails.
 
-## Limitations in v0.1
+## Limitations in 1.0
 
 - macOS only, and one managed local server at a time.
 - No custom data directory: managed data lives in `~/Library/Application Support/KV Studio/`.

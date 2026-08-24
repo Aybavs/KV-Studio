@@ -27,7 +27,7 @@ state/connections.json                the last connection target
 state/managed-server.json             which process KV Studio started
 ```
 
-There is no custom data directory in v0.1, and no credentials are stored: v0.1 has no
+There is no custom data directory in 1.0, and no credentials are stored: 1.0 has no
 authentication. Nothing is written to the keychain.
 
 ## Trusting a downloaded backend
@@ -55,6 +55,6 @@ else holds the port, KV Studio reports it and offers to connect — it never kil
 
 ## Local connections
 
-Connections are plain TCP to the host and port you give, with no TLS in v0.1. The managed server
+Connections are plain TCP to the host and port you give, with no TLS in 1.0. The managed server
 binds `127.0.0.1` by default and is not reachable from the network. Point KV Studio at a remote
 server only over a network you trust, or through a tunnel you control.

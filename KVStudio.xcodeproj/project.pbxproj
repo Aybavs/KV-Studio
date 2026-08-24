@@ -412,7 +412,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aybavs.KVStudio;
 				PRODUCT_NAME = "KV Studio";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -441,7 +441,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.aybavs.KVStudio;
 				PRODUCT_NAME = "KV Studio";
 				PROVISIONING_PROFILE_SPECIFIER = "";

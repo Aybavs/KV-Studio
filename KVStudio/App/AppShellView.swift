@@ -100,6 +100,8 @@ struct AppShellView: View {
                     .lineLimit(1)
                     .fixedSize()
             }
+            // The capsule is the toolbar's own chrome; without this the content sits against it.
+            .padding(.horizontal, 8)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Connection status")
             .accessibilityValue(currentToolbarTitle)

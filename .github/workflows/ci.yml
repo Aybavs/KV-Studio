@@ -10,7 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Both suites share these; the UI suite is deliberately absent, see the note in its job.
   PROJECT: KVStudio.xcodeproj
   SCHEME: KVStudio
 
@@ -94,3 +93,42 @@ jobs:
         run: |
           leaked=$(pgrep -fl 'kv-server|kv-fixtures' || true)
           if [ -n "$leaked" ]; then echo "::error::test run leaked processes:"; echo "$leaked"; exit 1; fi
+
+  ui:
+    name: End-to-end UI
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the backend floor this Studio requires
+        id: policy
+        run: echo "minimum=$(python3 -c "import json;print(json.load(open('KVStudio/Resources/BackendPolicy.json'))['minimumBackend'])")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the matching go-kv-store
+        uses: actions/checkout@v4
+        with:
+          repository: Aybavs/go-kv-store
+          ref: v${{ steps.policy.outputs.minimum }}
+          path: .backend-src
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .backend-src/go.mod
+          cache-dependency-path: .backend-src/go.sum
+
+      # Five scenarios skip themselves without a backend, so building one is what makes them run.
+      - name: Build kv-server
+        run: |
+          mkdir -p .build
+          (cd .backend-src && go build -o "$GITHUB_WORKSPACE/.build/kv-server" ./cmd/kv-server)
+
+      # Not a plain xcodebuild call: the runner has to be re-signed before it can listen. The
+      # script carries the reason.
+      - name: UI tests
+        run: ./scripts/run-ui-tests.sh
+
+      - name: No leaked server processes
+        if: always()
+        run: |
+          leaked=$(pgrep -fl 'kv-server' || true)
+          if [ -n "$leaked" ]; then echo "::error::the UI run leaked processes:"; echo "$leaked"; exit 1; fi

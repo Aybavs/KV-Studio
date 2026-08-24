@@ -6,13 +6,27 @@ import Testing
 @Suite(.timeLimit(.minutes(2)))
 struct ManagedServerControllerTests {
 
+    // readiness is how long our own child gets to come up, and only two tests below want it to
+    // expire. Everywhere else a short one hides the outcome under a timeout on any machine slower
+    // than the one these numbers were written on. probe and the shutdown budgets stay tight,
+    // because tests do rely on those expiring.
     private let timeouts = ManagedServerTimeouts(
-        readiness: TestPacing.scaled(.seconds(2)),
+        readiness: .seconds(20),
         readinessPoll: .milliseconds(20),
-        probe: TestPacing.scaled(.milliseconds(400)),
-        gracefulShutdown: TestPacing.scaled(.milliseconds(500)),
-        forcedShutdown: TestPacing.scaled(.seconds(2)),
-        outputDrain: TestPacing.scaled(.milliseconds(500)),
+        probe: .milliseconds(400),
+        gracefulShutdown: .milliseconds(500),
+        forcedShutdown: .seconds(2),
+        outputDrain: .milliseconds(500),
+        exitPoll: .milliseconds(50)
+    )
+
+    private let impatientReadiness = ManagedServerTimeouts(
+        readiness: .seconds(2),
+        readinessPoll: .milliseconds(20),
+        probe: .milliseconds(400),
+        gracefulShutdown: .milliseconds(500),
+        forcedShutdown: .seconds(2),
+        outputDrain: .milliseconds(500),
         exitPoll: .milliseconds(50)
     )
 
@@ -151,7 +165,7 @@ struct ManagedServerControllerTests {
         try usePort(try KVServerProcess.allocatePort(), in: paths)
 
         let script = try await fixtures.launchableScript(named: "kv-server", body: FixtureScript.sleepsForever)
-        let controller = ManagedServerController(paths: paths, resolver: resolver(script), timeouts: timeouts)
+        let controller = ManagedServerController(paths: paths, resolver: resolver(script), timeouts: impatientReadiness)
 
         let starting = Task { try await controller.start() }
         try await fixtures.waitUntilReady(script)
@@ -177,7 +191,7 @@ struct ManagedServerControllerTests {
         try usePort(try KVServerProcess.allocatePort(), in: paths)
 
         let script = try await fixtures.launchableScript(named: "kv-server", body: FixtureScript.ignoresTermination)
-        let controller = ManagedServerController(paths: paths, resolver: resolver(script), timeouts: timeouts)
+        let controller = ManagedServerController(paths: paths, resolver: resolver(script), timeouts: impatientReadiness)
 
         let starting = Task { try await controller.start() }
         try await fixtures.waitUntilReady(script)

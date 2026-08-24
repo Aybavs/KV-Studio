@@ -10,7 +10,7 @@ func toolbarTitle(for phase: ConnectionPhase) -> String {
         case .existing(let endpoint): return "Connecting to \(endpoint.host):\(endpoint.port)…"
         }
     case .connected(let session):
-        return "Connected to \(session.endpoint.host):\(session.endpoint.port)"
+        return "\(session.endpoint.host):\(session.endpoint.port)"
     case .failed(let attempt):
         switch attempt.failure {
         case .rejected(_, let outcome):

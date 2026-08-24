@@ -33,7 +33,7 @@ struct ServerBinaryResolver: Sendable {
     }
 
     // isExecutableFile also answers true for searchable directories.
-    private static func isExecutableProgram(at url: URL) -> Bool {
+    static func isExecutableProgram(at url: URL) -> Bool {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return false }
         guard !isDirectory.boolValue else { return false }

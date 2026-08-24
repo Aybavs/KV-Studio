@@ -31,10 +31,16 @@ struct SettingsView: View {
                 Button("Check for Updates") { viewModel.checkForUpdates() }
                     .disabled(!viewModel.canCheckForUpdates)
                     .accessibilityIdentifier("settings.checkUpdates")
+                if !viewModel.canCheckForUpdates {
+                    Text("This build has no update feed, so it cannot check.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings.updatesUnavailable")
+                }
             }
 
             Section("Backend") {
-                LabeledContent("Installed", value: viewModel.managedInstalledVersion ?? "Not installed")
+                LabeledContent("Installed", value: viewModel.managedInstalledDescription)
                     .font(.caption.monospaced())
                     .accessibilityIdentifier("settings.installedVersion")
                 LabeledContent("Bundled", value: viewModel.bundledVersion)

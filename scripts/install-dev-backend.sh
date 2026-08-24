@@ -21,4 +21,11 @@ mkdir -p "$DEST_DIR" "$STAGING_DIR"
 (cd "$GO_KV_STORE_SRC" && go build -o "$STAGING_DIR/kv-server" ./cmd/kv-server)
 mv -f "$STAGING_DIR/kv-server" "$DEST_DIR/kv-server"
 
-echo "installed $DEST_DIR/kv-server"
+# The app reads the installed version from here, the same file the real installer writes. Without
+# it a working backend is reported as not installed at all.
+VERSION="$(cd "$GO_KV_STORE_SRC" && git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+VERSION="${VERSION#v}"
+SHA="$(shasum -a 256 "$DEST_DIR/kv-server" | cut -d' ' -f1)"
+printf '{"version":"%s","sha256":"%s"}\n' "$VERSION" "$SHA" > "$DEST_DIR/metadata.json"
+
+echo "installed $DEST_DIR/kv-server ($VERSION)"

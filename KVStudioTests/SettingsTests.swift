@@ -147,4 +147,17 @@ struct BackendPolicyTests {
         #expect(policy.recommendedBackend == "1.1.0")
         #expect(policy.schema == 1)
     }
+
+    @Test func installedReadsTheRecordedVersionWhenThereIsOne() {
+        #expect(SettingsViewModel.installedDescription(version: "1.1.0", hasBinary: true) == "1.1.0")
+    }
+
+    @Test func installedSaysSoForABackendWhoseVersionWasNeverRecorded() {
+        // The app launches this binary; calling it "Not installed" contradicts what it does.
+        #expect(SettingsViewModel.installedDescription(version: nil, hasBinary: true) == "Installed, version unrecorded")
+    }
+
+    @Test func installedSaysNotInstalledOnlyWhenThereIsNoBackend() {
+        #expect(SettingsViewModel.installedDescription(version: nil, hasBinary: false) == "Not installed")
+    }
 }

@@ -42,6 +42,20 @@ final class SettingsViewModel {
         ServerViewModel.loadBackendVersion(from: paths.backendCurrentMetadata)
     }
 
+    // Reporting "Not installed" for a backend the app will happily launch contradicts itself; the
+    // three states are no backend, one whose version was recorded, and one whose version was not.
+    var managedInstalledDescription: String {
+        Self.installedDescription(
+            version: managedInstalledVersion,
+            hasBinary: ServerBinaryResolver.isExecutableProgram(at: paths.backendCurrentBinary)
+        )
+    }
+
+    nonisolated static func installedDescription(version: String?, hasBinary: Bool) -> String {
+        if let version { return version }
+        return hasBinary ? "Installed, version unrecorded" : "Not installed"
+    }
+
     nonisolated static func shouldRestore(_ prefs: Preferences) -> Bool {
         prefs.reopenLastConnection
     }

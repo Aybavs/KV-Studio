@@ -128,4 +128,10 @@ struct ToolbarTitleTests {
         #expect(title == "Connection interrupted")
         #expect(!title.contains("("))
     }
+
+    @Test func theToolbarShowsWhatItIsTalkingToRatherThanRepeatingTheSidebar() {
+        let endpoint = ConnectionEndpoint(host: "127.0.0.1", port: 6380)
+        let session = ConnectionSession(target: .existing(endpoint), endpoint: endpoint)
+        #expect(toolbarTitle(for: .connected(session)) == "127.0.0.1:6380")
+    }
 }

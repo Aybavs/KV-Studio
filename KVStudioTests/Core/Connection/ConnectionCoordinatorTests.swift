@@ -142,14 +142,16 @@ struct ConnectionCoordinatorTests {
         paths: ManagedPaths,
         server: any ManagedServerHosting = StubManagedServer(),
         budget: Duration = .milliseconds(800),
-        opener: any ConnectionLaneOpening = KVConnectionLaneOpener()
+        opener: any ConnectionLaneOpening = KVConnectionLaneOpener(),
+        heartbeat: Duration = .seconds(5)
     ) -> ConnectionCoordinator {
         ConnectionCoordinator(
             paths: paths,
             server: server,
             probe: CompatibilityProbe(budget: budget),
             inspector: PortConflictInspector(budget: budget),
-            opener: opener
+            opener: opener,
+            heartbeat: heartbeat
         )
     }
 
@@ -600,5 +602,82 @@ struct ConnectionCoordinatorTests {
         #expect(coordinator.phase == .connected(session(server.endpoint)))
         try await #require(coordinator.browser).ping()
         try await #require(coordinator.console).ping()
+    }
+
+    // MARK: - Reopening
+
+    @Test func restoringTheLastConnectionObeysTheReopenPreference() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let store = PreferencesStore(paths: paths)
+        try store.saveLastConnectionTarget(.existing(server.endpoint))
+
+        var preferences = store.loadPreferences()
+        preferences.reopenLastConnection = false
+        try store.savePreferences(preferences)
+        let declining = makeCoordinator(paths: paths)
+        await declining.restoreLastConnection()
+        #expect(declining.phase == .disconnected)
+        #expect(server.acceptedCount == 0)
+
+        preferences.reopenLastConnection = true
+        try store.savePreferences(preferences)
+        let accepting = makeCoordinator(paths: paths)
+        await accepting.restoreLastConnection()
+        #expect(accepting.phase == .connected(session(server.endpoint)))
+    }
+
+    // MARK: - Liveness
+
+    @Test func aServerThatDiesIsNoticedWithNothingBeingAsked() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        let coordinator = makeCoordinator(paths: paths, heartbeat: .milliseconds(50))
+
+        await coordinator.connect(to: .existing(server.endpoint))
+        try #require(coordinator.phase == .connected(session(server.endpoint)))
+
+        server.stop()
+
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if case .failed = coordinator.phase { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        guard case .failed = coordinator.phase else {
+            Issue.record("still reporting a connection to a server that is gone")
+            return
+        }
+        #expect(coordinator.browser == nil)
+        #expect(coordinator.console == nil)
+    }
+
+    @Test func theHeartbeatStopsWhenTheConnectionDoes() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        let coordinator = makeCoordinator(paths: paths, heartbeat: .milliseconds(50))
+
+        await coordinator.connect(to: .existing(server.endpoint))
+        await coordinator.disconnect()
+        server.stop()
+
+        // A heartbeat that outlives its connection would turn a deliberate disconnect into a failure.
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(coordinator.phase == .disconnected)
+    }
+
+    @Test func theHeartbeatLeavesAHealthyConnectionAlone() async throws {
+        let paths = try makePaths()
+        let server = try compatibleServer()
+        defer { server.stop() }
+        let coordinator = makeCoordinator(paths: paths, heartbeat: .milliseconds(50))
+
+        await coordinator.connect(to: .existing(server.endpoint))
+        try await Task.sleep(for: .milliseconds(400))
+
+        #expect(coordinator.phase == .connected(session(server.endpoint)))
+        try await #require(coordinator.browser).ping()
     }
 }

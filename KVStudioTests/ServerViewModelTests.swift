@@ -222,6 +222,24 @@ struct ServerViewModelManagedTests {
         let vm = ServerViewModel(paths: paths, coordinator: coordinator)
         #expect(vm.compatibilityText.contains("Compatible"))
     }
+
+    @Test func disconnectingAnExternalServerClosesTheLanesAndStopsNothing() async throws {
+        let paths = try makePaths()
+        let server = try FakeServer(maxPeers: 8) { peer in FakeKV.serve(peer) }
+        defer { server.stop() }
+        let stub = StubServerForViewModel(endpoint: server.endpoint)
+        let coordinator = ConnectionCoordinator(paths: paths, server: stub)
+        await coordinator.connect(to: .existing(server.endpoint))
+        let viewModel = ServerViewModel(paths: paths, coordinator: coordinator)
+        try #require(viewModel.isManaged == false)
+
+        await viewModel.disconnect()
+
+        #expect(coordinator.phase == .disconnected)
+        #expect(coordinator.browser == nil)
+        // The process is someone else's; closing our connection must not reach for it.
+        #expect(await stub.stopCount == 0)
+    }
 }
 
 private actor StubServerForViewModel: ManagedServerHosting {

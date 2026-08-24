@@ -74,3 +74,9 @@ go-kv-store. That is the compatibility model the product chose, not an oversight
 publishes two axes — the connection `phase` and the `managedServer` status — and holds the two
 `KVClient` lanes. Connecting to an existing server means connect, then probe, then accept: a server
 that fails the probe never becomes the active connection.
+
+While connected it pings the Browser lane every five seconds. Commands report a dead peer when they
+hit one, but nothing issues a command while the app sits idle, so without the ping a server that had
+gone would keep being drawn as connected until the user happened to ask it something. The ping
+starts where the connected phase is published and is cancelled with the lanes, so it can never
+outlive the connection it describes and turn a deliberate disconnect into a failure.

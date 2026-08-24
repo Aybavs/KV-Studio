@@ -3,14 +3,17 @@ import SwiftUI
 struct ServerView: View {
     @Bindable var coordinator: ConnectionCoordinator
     @State private var viewModel: ServerViewModel
+    private let onDisconnected: () -> Void
 
-    init(coordinator: ConnectionCoordinator) {
+    init(coordinator: ConnectionCoordinator, onDisconnected: @escaping () -> Void = {}) {
         self.coordinator = coordinator
+        self.onDisconnected = onDisconnected
         _viewModel = State(initialValue: ServerViewModel(coordinator: coordinator))
     }
 
-    init(coordinator: ConnectionCoordinator, paths: ManagedPaths) {
+    init(coordinator: ConnectionCoordinator, paths: ManagedPaths, onDisconnected: @escaping () -> Void = {}) {
         self.coordinator = coordinator
+        self.onDisconnected = onDisconnected
         _viewModel = State(initialValue: ServerViewModel(paths: paths, coordinator: coordinator))
     }
 
@@ -149,6 +152,20 @@ struct ServerView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("server.existingNote")
+                    Divider()
+                    HStack {
+                        Button("Disconnect") {
+                            Task {
+                                await viewModel.disconnect()
+                                onDisconnected()
+                            }
+                        }
+                        .accessibilityIdentifier("server.disconnectButton")
+                        Text("Closes this connection. The server keeps running.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
                 }
                 .padding(16)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))

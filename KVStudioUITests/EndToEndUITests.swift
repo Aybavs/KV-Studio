@@ -418,6 +418,28 @@ final class EndToEndUITests: XCTestCase {
         XCTAssertTrue(squatter.isRunning, "KV Studio must never kill a server it does not own")
     }
 
+    // MARK: - 10. Leaving a server Studio did not start
+
+    func testDisconnectingFromAnExternalServerReturnsToTheConnectionScreen() throws {
+        let binary = try backendBinary()
+        let port = try freePort()
+        let external = try startExternalServer(binary, port: port)
+
+        let app = launchApp()
+        connectToExisting(app, port: port)
+        XCTAssertTrue(app.node("browser.view").waitForExistence(timeout: 60))
+
+        app.node("sidebar.server").click()
+        XCTAssertTrue(app.node("server.existingView").waitForExistence(timeout: 15))
+        app.buttons["server.disconnectButton"].click()
+
+        XCTAssertTrue(
+            app.staticTexts["connection.onboarding.title"].waitForExistence(timeout: 15),
+            "disconnecting left nowhere to go"
+        )
+        XCTAssertTrue(external.isRunning, "disconnecting must not stop a server Studio does not own")
+    }
+
     // MARK: - 9. A bad backend update rolls back
 
     func testABadBackendUpdateRollsBackToThePreviousOne() throws {

@@ -26,6 +26,8 @@ final class ConnectionCoordinator {
     @ObservationIgnored private var isShuttingDown = false
     @ObservationIgnored private var ownsManagedServer = false
     @ObservationIgnored private var lastTarget: ConnectionTarget?
+    @ObservationIgnored private var heartbeatTask: Task<Void, Never>?
+    @ObservationIgnored private let heartbeat: Duration
 
     var outputLines: AsyncStream<String> { server.outputLines }
 
@@ -34,7 +36,8 @@ final class ConnectionCoordinator {
         server: any ManagedServerHosting,
         probe: CompatibilityProbe = CompatibilityProbe(),
         inspector: PortConflictInspector = PortConflictInspector(),
-        opener: any ConnectionLaneOpening = KVConnectionLaneOpener()
+        opener: any ConnectionLaneOpening = KVConnectionLaneOpener(),
+        heartbeat: Duration = .seconds(5)
     ) {
         self.paths = paths
         self.preferences = PreferencesStore(paths: paths)
@@ -42,6 +45,7 @@ final class ConnectionCoordinator {
         self.probe = probe
         self.inspector = inspector
         self.opener = opener
+        self.heartbeat = heartbeat
     }
 
     convenience init(paths: ManagedPaths) {
@@ -67,6 +71,7 @@ final class ConnectionCoordinator {
     }
 
     func restoreLastConnection() async {
+        guard preferences.loadPreferences().reopenLastConnection else { return }
         guard let target = preferences.loadLastConnectionTarget() else { return }
         await connect(to: target)
     }
@@ -231,6 +236,7 @@ final class ConnectionCoordinator {
     private func publish(_ next: ConnectionPhase) {
         guard isLive else { return }
         phase = next
+        if case .connected = next { beginHeartbeat() }
     }
 
     private func beginStop() -> Task<ManagedServerStopOutcome, Never> {
@@ -256,7 +262,34 @@ final class ConnectionCoordinator {
         console = KVClient(connection: consoleConnection)
     }
 
+    // Nothing asks the server anything while the app sits idle, so without this a dead peer keeps
+    // being reported as connected until the user happens to issue a command.
+    private func beginHeartbeat() {
+        heartbeatTask?.cancel()
+        let interval = heartbeat
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self else { return }
+                guard await self.checkStillReachable() else { return }
+            }
+        }
+    }
+
+    private func checkStillReachable() async -> Bool {
+        guard case .connected = phase, let browser else { return false }
+        do {
+            try await browser.ping()
+            return true
+        } catch {
+            await reportConnectionLost(Self.connectionError(error))
+            return false
+        }
+    }
+
     private func closeLanes() async {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
         let open = [browserConnection, consoleConnection].compactMap { $0 }
         browserConnection = nil
         consoleConnection = nil

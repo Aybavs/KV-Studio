@@ -18,7 +18,8 @@ Requires **macOS 14** or later and **go-kv-store 1.1.0** or later.
 - **Console** — send commands directly and read the RESP reply, on its own connection so a long
   browse never blocks a command.
 - **Server** — start, stop, and restart the local server; see its PID, endpoint, version,
-  persistence mode, append-only file size, and paths.
+  persistence mode, append-only file size, and paths. For a server you connected to rather than
+  started, Disconnect closes the connection and leaves the process running.
 - **Logs** — the managed server's live output, with search, pause, and a clear that empties the view
   and not the file on disk.
 - **Settings** — appearance, whether to reopen the last connection, and update checking.

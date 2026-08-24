@@ -155,6 +155,12 @@ final class ServerViewModel {
         refresh()
     }
 
+    // Closing our connection, not stopping a process: an external server is not ours to stop.
+    func disconnect() async {
+        await coordinator.disconnect()
+        refresh()
+    }
+
     func restart() async {
         await coordinator.disconnect()
         await coordinator.connect(to: .managedLocal)

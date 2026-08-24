@@ -73,7 +73,7 @@ struct AppShellView: View {
         case .console:
             ConsoleView(coordinator: coordinator)
         case .server:
-            ServerView(coordinator: coordinator)
+            ServerView(coordinator: coordinator) { selection = .browser }
         case .logs:
             LogsView(coordinator: coordinator)
         case .settings:

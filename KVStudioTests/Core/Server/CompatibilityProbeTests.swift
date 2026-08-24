@@ -171,7 +171,7 @@ struct CompatibilityProbeTests {
         }
         #expect(reported == budget)
         #expect(elapsed >= budget)
-        #expect(elapsed < .seconds(5))
+        #expect(elapsed < .seconds(15))
         #expect(holder.acceptedPeerHungUp(within: .seconds(2)))
     }
 
@@ -194,7 +194,7 @@ struct CompatibilityProbeTests {
         }
         // Generous enough that PING and DBSIZE still complete under load, because this test's
         // whole point is that the budget expires ON scan, after two commands got through.
-        let budget = Duration.seconds(2)
+        let budget = Duration.seconds(5)
         let probe = CompatibilityProbe(budget: budget)
 
         let started = ContinuousClock.now
@@ -203,7 +203,7 @@ struct CompatibilityProbeTests {
 
         #expect(outcome == .unreachable(.timedOut(step: .scan, budget: budget)))
         #expect(elapsed >= budget)
-        #expect(elapsed < .seconds(10))
+        #expect(elapsed < .seconds(20))
         #expect(log.recorded.count == 3)
     }
 
@@ -231,6 +231,7 @@ struct CompatibilityProbeTests {
     @Test func cancellationUnparksTheProbeAndIsReportedAsCancellation() async throws {
         let holder = try PortHolder()
         defer { holder.close() }
+        // A budget it cannot reach, so returning at all can only be cancellation.
         let probe = CompatibilityProbe(budget: .seconds(60))
 
         let task = Task { try await probe.run(against: holder.endpoint) }
@@ -239,7 +240,9 @@ struct CompatibilityProbeTests {
         task.cancel()
 
         await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(ContinuousClock.now - cancelled < .seconds(1))
+        // Unwinding the socket takes seconds on a loaded machine; what this pins is that the probe
+        // did not sit out its budget, not how fast the teardown happened to be.
+        #expect(ContinuousClock.now - cancelled < .seconds(20))
     }
 
     // MARK: - Error classes

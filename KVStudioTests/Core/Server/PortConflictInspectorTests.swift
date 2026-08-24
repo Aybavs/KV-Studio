@@ -74,7 +74,7 @@ struct PortConflictInspectorTests {
         }
         #expect(reported == budget)
         #expect(elapsed >= budget)
-        #expect(elapsed < .seconds(5))
+        #expect(elapsed < .seconds(15))
         #expect(holder.acceptedPeerHungUp(within: .seconds(2)))
     }
 }

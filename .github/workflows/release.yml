@@ -50,20 +50,6 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
 
-      # Temporary: lengths only, never values. An app-specific password is 19 characters and a
-      # team id is 10; anything else says which secret is wrong without printing any of them.
-      - name: Measure the notarization inputs
-        env:
-          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
-          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
-          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
-        run: |
-          for name in NOTARY_APPLE_ID NOTARY_TEAM_ID NOTARY_PASSWORD; do
-            eval "value=\${$name}"
-            bare=$(printf '%s' "$value" | tr -d '[:space:]')
-            printf '%s: %d characters, %d once whitespace is removed\n' "$name" "${#value}" "${#bare}"
-          done
-
       - name: Import signing certificate
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
@@ -118,7 +104,16 @@ jobs:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
           app="$RUNNER_TEMP/KVStudio.xcarchive/Products/Applications/$APP_NAME.app"
-          # Nested code must be signed before the enclosing app, innermost first.
+          # Nested code must be signed before the enclosing app, innermost first. Sparkle arrives
+          # signed by its own team, and re-signing the framework wrapper leaves its helpers exactly
+          # as they were; the notary service then rejects the build and names each one.
+          for nested in \
+            "$app/Contents/Frameworks/Sparkle.framework/Versions/"*/XPCServices/*.xpc \
+            "$app/Contents/Frameworks/Sparkle.framework/Versions/"*/Updater.app \
+            "$app/Contents/Frameworks/Sparkle.framework/Versions/"*/Autoupdate; do
+            [ -e "$nested" ] || continue
+            codesign --force --timestamp --options=runtime --sign "$IDENTITY" "$nested"
+          done
           find "$app/Contents/Frameworks" -name "*.framework" -maxdepth 1 -print0 2>/dev/null |
             xargs -0 -I{} codesign --force --timestamp --options=runtime --sign "$IDENTITY" {}
           find "$app/Contents/Resources/backend" -type f -perm -u+x -print0 2>/dev/null |
@@ -141,9 +136,21 @@ jobs:
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
+          # A rejection arrives as a status, not a non-zero exit, and the reasons live in a log that
+          # has to be asked for by submission id. Without this the run says only that stapling
+          # failed, which is the symptom of the rejection rather than the rejection.
           xcrun notarytool submit "$RUNNER_TEMP/KVStudio.dmg" \
             --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
-            --wait
+            --wait | tee "$RUNNER_TEMP/notary.txt"
+
+          submission=$(awk '/id: /{ print $2; exit }' "$RUNNER_TEMP/notary.txt")
+          if ! grep -q "status: Accepted" "$RUNNER_TEMP/notary.txt"; then
+            echo "::error::the notary service refused this build; its reasons follow"
+            xcrun notarytool log "$submission" \
+              --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" || true
+            exit 1
+          fi
+
           xcrun stapler staple "$RUNNER_TEMP/KVStudio.dmg"
           xcrun stapler validate "$RUNNER_TEMP/KVStudio.dmg"
 

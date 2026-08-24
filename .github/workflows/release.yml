@@ -99,6 +99,22 @@ jobs:
             CODE_SIGN_IDENTITY="${{ secrets.MACOS_SIGNING_IDENTITY }}" \
             OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime"
 
+      # The app resolves its bundled backend as Resources/kv-server and falls back to it when no
+      # other is installed. Downloading both architectures and never putting them in the bundle is
+      # what shipped a Studio that could not start the local server it advertises.
+      - name: Put the backend in the bundle
+        run: |
+          app="$RUNNER_TEMP/KVStudio.xcarchive/Products/Applications/$APP_NAME.app"
+          lipo -create \
+            "$RUNNER_TEMP/backend/kv-server-darwin-arm64" \
+            "$RUNNER_TEMP/backend/kv-server-darwin-amd64" \
+            -output "$app/Contents/Resources/kv-server"
+          chmod +x "$app/Contents/Resources/kv-server"
+          # The app is universal; a backend that is not would leave one architecture unable to start.
+          archs() { lipo -archs "$1" | tr ' ' '\n' | sort | tr '\n' ' '; }
+          [ "$(archs "$app/Contents/Resources/kv-server")" = "$(archs "$app/Contents/MacOS/$APP_NAME")" ] ||
+            { echo "::error::the bundled backend does not cover the same architectures as the app"; exit 1; }
+
       - name: Sign nested executables, then the app
         env:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
@@ -116,8 +132,7 @@ jobs:
           done
           find "$app/Contents/Frameworks" -name "*.framework" -maxdepth 1 -print0 2>/dev/null |
             xargs -0 -I{} codesign --force --timestamp --options=runtime --sign "$IDENTITY" {}
-          find "$app/Contents/Resources/backend" -type f -perm -u+x -print0 2>/dev/null |
-            xargs -0 -I{} codesign --force --timestamp --options=runtime --sign "$IDENTITY" {}
+          codesign --force --timestamp --options=runtime --sign "$IDENTITY" "$app/Contents/Resources/kv-server"
           codesign --force --timestamp --options=runtime --sign "$IDENTITY" "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
 
@@ -164,6 +179,12 @@ jobs:
           [ -d "$mount" ] || { echo "::error::could not find where the disk image mounted"; exit 1; }
           spctl --assess --type execute --verbose=4 "$mount/$APP_NAME.app"
           codesign --verify --deep --strict --verbose=2 "$mount/$APP_NAME.app"
+          # A Studio that cannot start the server it advertises passes every signature check, so
+          # this is the one assertion that catches it.
+          backend="$mount/$APP_NAME.app/Contents/Resources/kv-server"
+          [ -x "$backend" ] || { echo "::error::the shipped app carries no backend"; exit 1; }
+          codesign --verify --strict "$backend"
+          echo "bundled backend: $(lipo -archs "$backend")"
           hdiutil detach "$mount"
 
       - name: Sign the Sparkle appcast entry

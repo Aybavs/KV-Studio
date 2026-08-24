@@ -141,7 +141,7 @@ struct ConnectionCoordinatorTests {
     private func makeCoordinator(
         paths: ManagedPaths,
         server: any ManagedServerHosting = StubManagedServer(),
-        budget: Duration = .milliseconds(800),
+        budget: Duration = .seconds(5),
         opener: any ConnectionLaneOpening = KVConnectionLaneOpener(),
         heartbeat: Duration = .seconds(5)
     ) -> ConnectionCoordinator {

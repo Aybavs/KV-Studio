@@ -5,7 +5,7 @@ import Foundation
 @Suite(.timeLimit(.minutes(1)))
 struct PortConflictInspectorTests {
 
-    private let inspector = PortConflictInspector(budget: .milliseconds(800))
+    private let inspector = PortConflictInspector(budget: .seconds(5))
 
     @Test func freePortIsNotOccupied() async throws {
         let port = try KVServerProcess.allocatePort()

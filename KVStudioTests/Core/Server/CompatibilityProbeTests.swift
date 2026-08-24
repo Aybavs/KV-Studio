@@ -22,7 +22,9 @@ private final class CommandLog: @unchecked Sendable {
 @Suite(.timeLimit(.minutes(1)))
 struct CompatibilityProbeTests {
 
-    private let probe = CompatibilityProbe(budget: .milliseconds(800))
+    // The production default, so these exercise the real budget rather than one tuned to whichever
+    // machine happens to run them.
+    private let probe = CompatibilityProbe(budget: .seconds(5))
 
     private func bytes(_ text: String) -> Data {
         Data(text.utf8)

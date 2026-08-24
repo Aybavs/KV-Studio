@@ -58,8 +58,8 @@ struct ConnectionRestorationBehaviorTests {
         let coordinator = ConnectionCoordinator(
             paths: paths,
             server: host,
-            probe: CompatibilityProbe(budget: .milliseconds(800)),
-            inspector: PortConflictInspector(budget: .milliseconds(800)),
+            probe: CompatibilityProbe(budget: .seconds(5)),
+            inspector: PortConflictInspector(budget: .seconds(5)),
             opener: KVConnectionLaneOpener()
         )
         try PreferencesStore(paths: paths).saveLastConnectionTarget(.managedLocal)
@@ -84,8 +84,8 @@ struct ConnectionRestorationBehaviorTests {
         let coordinator = ConnectionCoordinator(
             paths: paths,
             server: StubLifecycleHost(endpoint: server.endpoint),
-            probe: CompatibilityProbe(budget: .milliseconds(800)),
-            inspector: PortConflictInspector(budget: .milliseconds(800)),
+            probe: CompatibilityProbe(budget: .seconds(5)),
+            inspector: PortConflictInspector(budget: .seconds(5)),
             opener: KVConnectionLaneOpener()
         )
         try PreferencesStore(paths: paths).saveLastConnectionTarget(.existing(server.endpoint))
@@ -135,8 +135,8 @@ struct ConnectionRestorationBehaviorTests {
         let coordinator = ConnectionCoordinator(
             paths: paths,
             server: host,
-            probe: CompatibilityProbe(budget: .milliseconds(800)),
-            inspector: PortConflictInspector(budget: .milliseconds(800)),
+            probe: CompatibilityProbe(budget: .seconds(5)),
+            inspector: PortConflictInspector(budget: .seconds(5)),
             opener: KVConnectionLaneOpener()
         )
         await coordinator.connect(to: .managedLocal)

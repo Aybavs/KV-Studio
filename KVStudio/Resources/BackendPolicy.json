@@ -1,6 +1,6 @@
 {
   "schema": 1,
   "minimumBackend": "1.1.0",
-  "bundledBackend": "1.1.0",
-  "recommendedBackend": "1.1.0"
+  "bundledBackend": "1.2.0",
+  "recommendedBackend": "1.2.0"
 }

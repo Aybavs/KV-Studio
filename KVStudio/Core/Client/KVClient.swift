@@ -10,6 +10,7 @@ actor KVClient {
 
     private enum Command {
         static let ping = Data("PING".utf8)
+        static let version = Data("VERSION".utf8)
         static let dbsize = Data("DBSIZE".utf8)
         static let scan = Data("SCAN".utf8)
         static let match = Data("MATCH".utf8)
@@ -30,6 +31,17 @@ actor KVClient {
     func ping() async throws {
         let reply = try await execute([Command.ping])
         guard case .simpleString = reply else { throw KVClientError.unexpectedReply(reply) }
+    }
+
+    /// A server older than go-kv-store 1.2 answers `ERR unknown command`, which is itself an
+    /// answer: the version cannot be asked for, rather than the call having failed.
+    func serverVersion() async throws -> String? {
+        let reply = try await connection.send([Command.version])
+        switch reply {
+        case .bulkString(let data?): return String(decoding: data, as: UTF8.self)
+        case .error: return nil
+        default: throw KVClientError.unexpectedReply(reply)
+        }
     }
 
     func dbSize() async throws -> Int {

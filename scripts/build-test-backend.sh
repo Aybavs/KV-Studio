@@ -16,6 +16,8 @@ if [ ! -d "$GO_KV_STORE_SRC" ]; then
 fi
 
 mkdir -p "$REPO_ROOT/.build"
-(cd "$GO_KV_STORE_SRC" && go build -o "$DEST" ./cmd/kv-server)
+VERSION="$(cd "$GO_KV_STORE_SRC" && git describe --tags --always --dirty 2>/dev/null || echo unknown)"
+VERSION="${VERSION#v}"
+(cd "$GO_KV_STORE_SRC" && go build -ldflags "-X main.version=$VERSION" -o "$DEST" ./cmd/kv-server)
 
-echo "built $DEST"
+echo "built $DEST ($VERSION)"

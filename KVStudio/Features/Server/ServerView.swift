@@ -31,7 +31,11 @@ struct ServerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { viewModel.refresh() }
-        .onChange(of: coordinator.phase) { _, _ in viewModel.refresh() }
+        .task { await viewModel.refreshReportedVersion() }
+        .onChange(of: coordinator.phase) { _, _ in
+            viewModel.refresh()
+            Task { await viewModel.refreshReportedVersion() }
+        }
         .onChange(of: coordinator.managedServer) { _, _ in viewModel.refresh() }
     }
 
@@ -147,6 +151,7 @@ struct ServerView: View {
                         .accessibilityIdentifier("server.externalBadge")
                     Divider()
                     row(label: "Endpoint", value: viewModel.hostPortText, identifier: "server.endpoint", mono: true)
+                    row(label: "Version", value: viewModel.externalVersionText, identifier: "server.externalVersion", mono: true)
                     row(label: "Compatibility", value: viewModel.compatibilityText, identifier: "server.compatibility")
                     Text("Process controls and managed data are hidden for external servers.")
                         .font(.callout)

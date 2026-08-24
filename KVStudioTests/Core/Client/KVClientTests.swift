@@ -342,4 +342,41 @@ import Foundation
             _ = try await client.scan(cursor: 0, match: nil, count: 10)
         }
     }
+
+    // MARK: - VERSION
+
+    @Test func serverVersionReadsTheBulkReply() async throws {
+        let server = try FakeServer { peer in
+            let command = peer.readCommand()
+            #expect(command == [self.bytes("VERSION")])
+            peer.write(self.bytes("$5\r\n1.2.0\r\n"))
+        }
+        defer { server.stop() }
+
+        let client = try await client(to: server)
+        #expect(try await client.serverVersion() == "1.2.0")
+    }
+
+    // A server that does not know the command has answered the question: it is older than 1.2.
+    @Test func serverVersionIsNilWhenTheCommandIsUnknown() async throws {
+        let server = try FakeServer { peer in
+            _ = peer.readCommand()
+            peer.write(self.bytes("-ERR unknown command 'VERSION'\r\n"))
+        }
+        defer { server.stop() }
+
+        let client = try await client(to: server)
+        #expect(try await client.serverVersion() == nil)
+    }
+
+    @Test func serverVersionRejectsAReplyThatIsNeitherAVersionNorARefusal() async throws {
+        let server = try FakeServer { peer in
+            _ = peer.readCommand()
+            peer.write(self.bytes(":7\r\n"))
+        }
+        defer { server.stop() }
+
+        let client = try await client(to: server)
+        await #expect(throws: KVClientError.self) { try await client.serverVersion() }
+    }
 }

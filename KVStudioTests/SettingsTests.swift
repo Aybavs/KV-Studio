@@ -143,8 +143,10 @@ struct BackendPolicyTests {
 
     @Test func bundlePolicyIsPresentAndValid() {
         let policy = BackendPolicy.loadFromBundle()
-        #expect(policy.bundledBackend == "1.1.0")
-        #expect(policy.recommendedBackend == "1.1.0")
+        #expect(policy.bundledBackend == "1.2.0")
+        #expect(policy.recommendedBackend == "1.2.0")
+        // The floor stays where it is: 1.2 is worth shipping, not worth refusing 1.1 over.
+        #expect(policy.minimumBackend == "1.1.0")
         #expect(policy.schema == 1)
     }
 

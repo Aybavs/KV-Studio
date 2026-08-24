@@ -192,4 +192,15 @@ struct LiveBackendTests {
             #expect(try await client.dbSize() == count)
         }
     }
+
+    // MARK: - Introspection
+
+    @Test func aRealServerReportsItsVersion() async throws {
+        try await withKVServer(binary: binary) { server in
+            let client = try await self.client(server)
+            // The dev scripts stamp what they built, so a server that answers answers something.
+            let version = try await client.serverVersion()
+            #expect(version?.isEmpty == false, "the backend did not report a version")
+        }
+    }
 }

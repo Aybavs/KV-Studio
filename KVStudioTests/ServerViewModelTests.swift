@@ -234,6 +234,32 @@ struct ServerViewModelManagedTests {
         // The process is someone else's; closing our connection must not reach for it.
         #expect(await stub.stopCount == 0)
     }
+    @Test func theServerOwnReportBeatsWhatTheInstallerRecorded() throws {
+        let paths = try makePaths()
+        let coordinator = ConnectionCoordinator(paths: paths, server: StubServerForViewModel())
+        let vm = ServerViewModel(paths: paths, coordinator: coordinator)
+        vm.setVersionsForTesting(recorded: "1.1.0", reported: "1.2.0")
+        #expect(vm.backendVersionText == "1.2.0")
+    }
+
+    @Test func theRecordedVersionIsUsedWhenTheServerCannotBeAsked() throws {
+        let paths = try makePaths()
+        let coordinator = ConnectionCoordinator(paths: paths, server: StubServerForViewModel())
+        let vm = ServerViewModel(paths: paths, coordinator: coordinator)
+        vm.setVersionsForTesting(recorded: "1.1.0", reported: nil)
+        #expect(vm.backendVersionText == "1.1.0")
+    }
+
+    // The record describes the backend Studio installed, which says nothing about someone else's.
+    @Test func anExternalServerIsNeverDescribedByTheInstallersRecord() throws {
+        let paths = try makePaths()
+        let coordinator = ConnectionCoordinator(paths: paths, server: StubServerForViewModel())
+        let vm = ServerViewModel(paths: paths, coordinator: coordinator)
+        vm.setVersionsForTesting(recorded: "1.1.0", reported: nil)
+        #expect(vm.externalVersionText == "Unknown")
+        vm.setVersionsForTesting(recorded: "1.1.0", reported: "1.2.0")
+        #expect(vm.externalVersionText == "1.2.0")
+    }
 }
 
 private actor StubServerForViewModel: ManagedServerHosting {

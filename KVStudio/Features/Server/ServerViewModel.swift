@@ -9,6 +9,7 @@ final class ServerViewModel {
     let coordinator: ConnectionCoordinator
 
     private(set) var backendVersion: String?
+    private(set) var reportedVersion: String?
     private(set) var aofFileSize: UInt64?
     private(set) var preferences: Preferences = .default
 
@@ -20,6 +21,17 @@ final class ServerViewModel {
 
     convenience init(coordinator: ConnectionCoordinator) {
         self.init(paths: coordinator.paths, coordinator: coordinator)
+    }
+
+    // What the server says beats what the installer recorded: the record describes what was put
+    // there, the reply describes what is actually answering, and for a server Studio did not
+    // install there is no record at all.
+    func refreshReportedVersion() async {
+        guard let client = coordinator.browser else {
+            reportedVersion = nil
+            return
+        }
+        reportedVersion = (try? await client.serverVersion()) ?? nil
     }
 
     func refresh() {
@@ -111,7 +123,16 @@ final class ServerViewModel {
 
     var hostPortText: String { Self.hostPortText(phase: coordinator.phase, preferences: preferences) }
 
-    var backendVersionText: String { backendVersion ?? "Unknown" }
+    var backendVersionText: String { reportedVersion ?? backendVersion ?? "Unknown" }
+
+    // No fallback to the recorded version here: that record describes the backend Studio installed,
+    // which says nothing about a server someone else is running.
+    var externalVersionText: String { reportedVersion ?? "Unknown" }
+
+    func setVersionsForTesting(recorded: String?, reported: String?) {
+        backendVersion = recorded
+        reportedVersion = reported
+    }
 
     var aofModeText: String { "AOF enabled — appendfsync everysec" }
 

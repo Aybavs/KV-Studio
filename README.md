@@ -1,63 +1,126 @@
 # KV Studio
 
-A native macOS client and control plane for [`go-kv-store`](https://github.com/Aybavs/go-kv-store).
+A native macOS client and control plane for
+[go-kv-store](https://github.com/Aybavs/go-kv-store).
 
-KV Studio speaks the server's RESP2 wire protocol directly from Swift, with no Redis client
-dependency. It can run and own a local `kv-server`, or connect to one you already have, and it
-browses keys and values without ever assuming they are text.
+Browse keys, inspect binary-safe values, run commands, manage a local `kv-server`, and watch its
+logs — from one native Swift application.
 
-> **Screenshot:** not yet captured. Add `docs/images/browser.png` and link it here before the first
-> tagged release — a screenshot that does not match the shipped UI is worse than none.
+![KV Studio browsing a key and inspecting its value](docs/images/value-inspector.png)
 
-Requires **macOS 14** or later and **go-kv-store 1.1.0** or later.
-
-## What it does
-
-- **Browser** — infinite scroll over `SCAN`, server-side `MATCH` search, and a value viewer that
-  shows Text, formatted JSON, or a hex dump.
-- **Console** — send commands directly and read the RESP reply, on its own connection so a long
-  browse never blocks a command.
-- **Server** — start, stop, and restart the local server; see its PID, endpoint, version,
-  persistence mode, append-only file size, and paths. For a server you connected to rather than
-  started, Disconnect closes the connection and leaves the process running.
-- **Logs** — the managed server's live output, with search, pause, and a clear that empties the view
-  and not the file on disk.
-- **Settings** — appearance, whether to reopen the last connection, and update checking.
-
-## Local server or an existing one
-
-**Local.** KV Studio runs exactly one `kv-server` for you, on `127.0.0.1:6380` by default, with
-`--appendonly` and `--appendfsync everysec`. It owns that process: it records the identity of what
-it started, adopts its own server again after a crash, and stops it gracefully when you quit.
-
-It will not take over a port it does not own. If something else is already on the port, KV Studio
-says so and offers to connect to it instead — it never signals a process it cannot prove is its own.
-
-**Existing.** Give a host and port and KV Studio probes the server before trusting it, with `PING`,
-`DBSIZE`, and `SCAN 0 COUNT 1`. A server that fails the probe is reported, not connected to. Process
-controls and log capture are hidden for a server KV Studio does not manage.
-
-## Binary safety
-
-Keys and values are `Data` end to end and are never forced through `String`.
-
-- A value is shown as Text when it is valid UTF-8, as formatted JSON when it is valid JSON, and as a
-  hex dump otherwise. You can override the choice.
-- Keys can be created in Text or Hex.
-- Copying a value copies the text when it is text, and hex when it is not, so no byte is lost to a
-  replacement character.
-- `NUL`, `CRLF`, and invalid UTF-8 all round-trip unchanged. There are tests that assert exactly
-  that against a real server.
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-333333)
+![Swift 6](https://img.shields.io/badge/Swift-6-F05138)
+![RESP2](https://img.shields.io/badge/protocol-RESP2-4B8BBE)
+![MIT](https://img.shields.io/badge/licence-MIT-green)
 
 ## Install
 
-Download the notarized `.dmg` from the releases page and drag KV Studio to Applications.
+Download the notarized `.dmg` from the [latest release](https://github.com/Aybavs/KV-Studio/releases/latest)
+and drag KV Studio to Applications. A `kv-server` is bundled, so **Start Local Server** works with
+nothing else installed.
 
-To build from source you need Xcode 16 or later:
+## Features
+
+- **Key browser** — infinite scrolling over `SCAN`, with server-side `MATCH` search
+- **Value inspector** — Text, formatted JSON, or a hex dump, chosen automatically or by hand
+- **Binary-safe** — arbitrary bytes round-trip without corruption
+- **Built-in console** — send RESP2 commands and read the raw reply
+- **Local server management** — start, stop, and restart a `kv-server` KV Studio owns
+- **Existing servers** — connect to one you already run, probed for compatibility first
+- **Live logs** — search, pause, and clear
+- **Safe process ownership** — never signals a process it cannot prove is its own
+- **Automatic updates** — SHA-256 verified, with rollback when a backend fails to start
+
+## How it fits together
+
+```
+                    ┌─────────────────────┐
+                    │      KV Studio      │
+                    │       SwiftUI       │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+          Browser           Console           Logs
+              │                │                │
+              └────────────────┼────────────────┘
+                               │
+                         RESP2 / TCP
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │      kv-server      │
+                    │     go-kv-store     │
+                    └─────────────────────┘
+```
+
+KV Studio speaks the server's RESP2 wire protocol directly from Swift, with no Redis client
+dependency. The Browser and the Console get separate connections, so a long traversal never sits in
+front of a command.
+
+## Binary-safe by design
+
+Keys and values are `Data` end to end and are never forced through `String`.
+
+```
+UTF-8 value  →  Text
+JSON value   →  Formatted JSON
+Binary data  →  Hex
+```
+
+`NUL`, `CRLF`, invalid UTF-8, and arbitrary bytes all round-trip unchanged — there are tests that
+assert exactly that against a real server. Copying a value copies text when it is text and hex when
+it is not, so no byte is lost to a replacement character. Keys can be created in Text or Hex.
+
+## Local server or an existing one
+
+**Local** — KV Studio runs one `kv-server` on `127.0.0.1:6380`, with `--appendonly` and
+`--appendfsync everysec`.
+
+- Owns the process it started and adopts its own server again after a crash
+- Shuts it down gracefully when you quit
+- Never takes over a port it does not own; it offers to connect instead
+- Data lives under `~/Library/Application Support/KV Studio/`
+
+**Existing** — give a host and port.
+
+- Probed with `PING`, `DBSIZE`, and `SCAN 0 COUNT 1` before it is trusted
+- A server that fails the probe is reported, not connected to
+- Process controls and log capture are hidden for a server KV Studio does not manage
+- Disconnect closes the connection and leaves the server running
+
+## Screenshots
+
+### Key browser
+
+![The key browser](docs/images/browser.png)
+
+### Hex viewer
+
+![A binary value shown as a hex dump](docs/images/hex-viewer.png)
+
+### Server management
+
+![Managed server status and controls](docs/images/server.png)
+
+## Updates
+
+KV Studio checks on launch or on demand, and nothing installs itself.
+
+Every archive is verified against its published SHA-256 before it is unpacked. The backend is
+updated first and compatibility-checked; one that fails to start is rolled back to the previous
+working version automatically.
+
+See [docs/updater.md](docs/updater.md) for the full flow.
+
+## Build from source
+
+Requires Xcode 16 or later.
 
 ```bash
-git clone <this repository>
-cd kv-studio
+git clone https://github.com/Aybavs/KV-Studio.git
+cd KV-Studio
 xcodebuild build -project KVStudio.xcodeproj -scheme KVStudio -configuration Debug
 ```
 
@@ -89,27 +152,15 @@ are refused, so the script re-signs the runner between building and running. Qui
 session first: a debugger-attached app cannot be replaced by the runner, and the suite stops with
 that reason rather than working around it.
 
-## Updates
+## Limitations
 
-Nothing installs itself. KV Studio checks when you ask it to (and on launch, if you leave that on in
-Settings), then shows one card describing what is available.
-
-The app and the backend have independent versions, and a coordinated update handles both in the
-order that keeps them compatible: the backend is downloaded and verified first, the app updates and
-relaunches, and the new app activates the backend it inherited. Every backend archive is checked
-against the release's published SHA-256 before anything is unpacked, and a backend that fails to
-start or fails its compatibility probe is rolled back to the previous one automatically.
-
-See [docs/updater.md](docs/updater.md) for the full flow and what happens when a step fails.
-
-## Limitations in 1.0
-
-- macOS only, and one managed local server at a time.
-- No custom data directory: managed data lives in `~/Library/Application Support/KV Studio/`.
-- No TLS or authentication UI, no cluster UI, no RESP3.
-- No Pub/Sub, keyspace notifications, or persistence dashboard.
-- Not a general Redis client. Compatibility is decided by capability — `PING`, `DBSIZE`, and
-  `SCAN` — so other servers offering those may connect, but nothing else is supported.
+- macOS only
+- One managed local server at a time
+- No custom data directory
+- No TLS or authentication UI
+- No RESP3, no cluster UI, no Pub/Sub
+- Not a general Redis client — compatibility is decided by capability, so other servers offering
+  `PING`, `DBSIZE`, and `SCAN` may connect, but nothing beyond that is supported
 
 ## Documentation
 
@@ -121,5 +172,5 @@ See [docs/updater.md](docs/updater.md) for the full flow and what happens when a
 ## License
 
 MIT — see [LICENSE](LICENSE). The bundled `kv-server` comes from
-[`go-kv-store`](https://github.com/Aybavs/go-kv-store), which is MIT as well; Sparkle is under its
-own MIT-style licence.
+[go-kv-store](https://github.com/Aybavs/go-kv-store), which is MIT as well; Sparkle is under its own
+MIT-style licence.

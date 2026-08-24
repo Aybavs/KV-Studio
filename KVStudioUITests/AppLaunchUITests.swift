@@ -16,8 +16,15 @@ final class AppLaunchUITests: XCTestCase {
 
     // Matches on identifier through `node(_:)`, not on element type: the sidebar header and the
     // toolbar status are combined accessibility elements, not static text.
-    func testAppLaunchesToItsConnectionScreen() {
+    func testAppLaunchesToItsConnectionScreen() throws {
+        let support = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kv-launch-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: support) }
+
         let app = XCUIApplication()
+        app.launchEnvironment["KV_STUDIO_SUPPORT_DIR"] = support.path
+        addTeardownBlock { app.terminate() }
         app.launch()
 
         XCTAssertTrue(

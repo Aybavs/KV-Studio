@@ -98,23 +98,65 @@ final class EndToEndUITests: XCTestCase {
         process.standardError = FileHandle.nullDevice
         try process.run()
         spawned.append(process)
+        try waitUntilListening(port: port, process: process)
         return process
     }
 
+    private func waitUntilListening(port: UInt16, process: Process) throws {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            guard process.isRunning else {
+                throw PortError.failed("the server exited before it listened on \(port); status \(process.terminationStatus)", 0)
+            }
+            let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+            defer { Darwin.close(descriptor) }
+            var address = sockaddr_in()
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let connected = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            if connected == 0 { return }
+            usleep(100_000)
+        }
+        throw PortError.failed("the server never listened on \(port)", 0)
+    }
+
+    /// The runner is sandboxed with network.client only, so bind() is denied outright. A port is
+    /// taken to be free when connecting to it is refused.
     private func freePort() throws -> UInt16 {
-        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-        defer { Darwin.close(socket) }
+        for _ in 0..<64 {
+            let candidate = UInt16.random(in: 49152...65535)
+            if !isListening(port: candidate) { return candidate }
+        }
+        throw PortError.failed("no free port found in the ephemeral range", 0)
+    }
+
+    private func isListening(port: UInt16) -> Bool {
+        let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { Darwin.close(descriptor) }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
         address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        _ = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(socket, $0, length) }
+        return withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        } == 0
+    }
+
+    private enum PortError: Error, CustomStringConvertible {
+        case failed(String, Int32)
+        var description: String {
+            guard case .failed(let step, let code) = self else { return "" }
+            return code == 0 ? "cannot allocate a test port: \(step)"
+                             : "cannot allocate a test port: \(step) failed, errno \(code) (\(String(cString: strerror(code))))"
         }
-        _ = withUnsafeMutablePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(socket, $0, &length) }
-        }
-        return UInt16(bigEndian: address.sin_port)
     }
 
     private func usePreferredLocalPort(_ port: UInt16) throws {
@@ -134,12 +176,17 @@ final class EndToEndUITests: XCTestCase {
     private func connectToExisting(_ app: XCUIApplication, port: UInt16) {
         let host = app.textFields["connection.existing.host"]
         XCTAssertTrue(host.waitForExistence(timeout: 10))
-        host.click()
-        host.typeText("127.0.0.1")
-        let portField = app.textFields["connection.existing.port"]
-        portField.click()
-        portField.typeText(String(port))
+        replace(host, with: "127.0.0.1")
+        replace(app.textFields["connection.existing.port"], with: String(port))
+        XCTAssertEqual(host.value as? String, "127.0.0.1", "the host field was appended to, not replaced")
         app.buttons["connection.existing.connect"].click()
+    }
+
+    /// Both fields arrive prefilled, so typing into them appends and produces an unreachable address.
+    private func replace(_ field: XCUIElement, with text: String) {
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(text)
     }
 
     // MARK: - 1. First launch through a key's whole life
@@ -173,7 +220,7 @@ final class EndToEndUITests: XCTestCase {
         // Editing with Preserve TTL on must not drop the remaining expiry.
         let preserve = app.switches["browser.preserveTTLToggle"]
         XCTAssertTrue(preserve.waitForExistence(timeout: 10), "the preserve-TTL control is missing")
-        XCTAssertEqual(preserve.value as? String, "1", "preserve TTL should default to on for an expiring key")
+        XCTAssertEqual(String(describing: preserve.value ?? ""), "1", "preserve TTL should default to on for an expiring key")
         app.textViews["browser.editField"].click()
         app.textViews["browser.editField"].typeText("second")
         app.buttons["browser.saveButton"].click()

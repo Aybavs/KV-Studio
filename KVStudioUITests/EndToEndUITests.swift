@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import XCTest
 
@@ -55,7 +56,21 @@ final class EndToEndUITests: XCTestCase {
 
     private func launchApp(backend: URL? = nil, extra: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
-        addTeardownBlock { app.terminate() }
+        // terminate() kills the app before it can stop the server it started, which would outlive
+        // the run and take a port with it; quit the way the app expects, then reap what is left.
+        let record = supportDirectory.appendingPathComponent("state/managed-server.json")
+        addTeardownBlock {
+            if app.state != .notRunning {
+                app.typeKey("q", modifierFlags: .command)
+                _ = app.wait(for: .notRunning, timeout: 20)
+                app.terminate()
+            }
+            if let data = try? Data(contentsOf: record),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let pid = json["pid"] as? Int, kill(pid_t(pid), 0) == 0 {
+                kill(pid_t(pid), SIGTERM)
+            }
+        }
         app.launchEnvironment["KV_STUDIO_SUPPORT_DIR"] = supportDirectory.path
         if let backend { app.launchEnvironment["KV_SERVER_BINARY"] = backend.path }
         for (key, value) in extra { app.launchEnvironment[key] = value }
@@ -63,10 +78,7 @@ final class EndToEndUITests: XCTestCase {
         // Each run costs minutes of someone's screen, so a failure carries the tree that caused it.
         addTeardownBlock { [weak self] in
             guard (self?.testRun?.failureCount ?? 0) > 0 else { return }
-            let attachment = XCTAttachment(string: app.debugDescription)
-            attachment.name = "accessibility-tree-at-failure"
-            attachment.lifetime = .keepAlways
-            self?.add(attachment)
+            print("KVUI-TREE-BEGIN\n\(app.debugDescription)\nKVUI-TREE-END")
         }
         XCTAssertTrue(app.node("app.title").waitForExistence(timeout: 30), "the app never presented its shell")
         return app
@@ -176,17 +188,21 @@ final class EndToEndUITests: XCTestCase {
     private func connectToExisting(_ app: XCUIApplication, port: UInt16) {
         let host = app.textFields["connection.existing.host"]
         XCTAssertTrue(host.waitForExistence(timeout: 10))
-        replace(host, with: "127.0.0.1")
-        replace(app.textFields["connection.existing.port"], with: String(port))
-        XCTAssertEqual(host.value as? String, "127.0.0.1", "the host field was appended to, not replaced")
+        type("127.0.0.1", into: host)
+        type(String(port), into: app.textFields["connection.existing.port"])
         app.buttons["connection.existing.connect"].click()
     }
 
-    /// Both fields arrive prefilled, so typing into them appends and produces an unreachable address.
-    private func replace(_ field: XCUIElement, with text: String) {
+    /// Fields arrive prefilled, so typing into one appends rather than replaces. Synthesised
+    /// keystrokes also go through the active keyboard layout — on a Turkish one the i in
+    /// "e2e:binary" never arrives — so the text is pasted, which no layout can reinterpret.
+    private func type(_ text: String, into field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         field.click()
         field.typeKey("a", modifierFlags: .command)
-        field.typeText(text)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        field.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(field.value as? String, text, "the field did not take the text pasted into it", file: file, line: line)
     }
 
     // MARK: - 1. First launch through a key's whole life
@@ -201,15 +217,12 @@ final class EndToEndUITests: XCTestCase {
 
         app.buttons["browser.newKeyButton"].click()
         XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
-        app.textFields["newKey.keyField"].click()
-        app.textFields["newKey.keyField"].typeText("e2e:key")
-        app.textViews["newKey.valueField"].click()
-        app.textViews["newKey.valueField"].typeText("first")
+        type("e2e:key", into: app.textFields["newKey.keyField"])
+        type("first", into: app.textViews["newKey.valueField"])
         // The preserve-TTL control only exists for a key that actually expires.
         app.popUpButtons["newKey.expiryPicker"].click()
         app.menuItems["Seconds"].click()
-        app.textFields["newKey.expiryValueField"].click()
-        app.textFields["newKey.expiryValueField"].typeText("600")
+        type("600", into: app.textFields["newKey.expiryValueField"])
         app.buttons["newKey.createButton"].click()
 
         let row = app.node("browser.row.e2e:key")
@@ -221,8 +234,7 @@ final class EndToEndUITests: XCTestCase {
         let preserve = app.switches["browser.preserveTTLToggle"]
         XCTAssertTrue(preserve.waitForExistence(timeout: 10), "the preserve-TTL control is missing")
         XCTAssertEqual(String(describing: preserve.value ?? ""), "1", "preserve TTL should default to on for an expiring key")
-        app.textViews["browser.editField"].click()
-        app.textViews["browser.editField"].typeText("second")
+        type("second", into: app.textViews["browser.editField"])
         app.buttons["browser.saveButton"].click()
 
         let ttl = app.node("browser.detail.ttl")
@@ -264,11 +276,16 @@ final class EndToEndUITests: XCTestCase {
         """]
         try stub.run()
         spawned.append(stub)
+        // Without this the scenario passes when nothing is listening at all, which is a different
+        // rejection than the one it claims to cover.
+        try waitUntilListening(port: port, process: stub)
 
         let app = launchApp()
         connectToExisting(app, port: port)
 
-        XCTAssertTrue(app.node("connection.error").waitForExistence(timeout: 30), "no compatibility error was shown")
+        let error = app.node("connection.error")
+        XCTAssertTrue(error.waitForExistence(timeout: 30), "no compatibility error was shown")
+        XCTAssertEqual(error.value as? String, "Incompatible server", "the server was refused for the wrong reason")
         XCTAssertFalse(app.node("browser.view").exists, "an incompatible server must not reach the Browser")
     }
 
@@ -285,11 +302,12 @@ final class EndToEndUITests: XCTestCase {
 
         app.buttons["browser.newKeyButton"].click()
         XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
-        app.textFields["newKey.keyField"].click()
-        app.textFields["newKey.keyField"].typeText("e2e:binary")
+        type("e2e:binary", into: app.textFields["newKey.keyField"])
         app.radioGroups["newKey.valueModePicker"].radioButtons["Hex"].click()
-        app.textViews["newKey.valueField"].click()
-        app.textViews["newKey.valueField"].typeText("00ff10")
+        // Hex mode swaps the editor for a single-line field, so this is not the text-mode control.
+        let hexValue = app.textFields["newKey.valueField"]
+        XCTAssertTrue(hexValue.waitForExistence(timeout: 10), "the hex value field never appeared")
+        type("00ff10", into: hexValue)
         app.buttons["newKey.createButton"].click()
 
         let row = app.node("browser.row.e2e:binary")
@@ -313,17 +331,14 @@ final class EndToEndUITests: XCTestCase {
         for name in ["alpha:1", "beta:1"] {
             app.buttons["browser.newKeyButton"].click()
             XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
-            app.textFields["newKey.keyField"].click()
-            app.textFields["newKey.keyField"].typeText(name)
-            app.textViews["newKey.valueField"].click()
-            app.textViews["newKey.valueField"].typeText("v")
+            type(name, into: app.textFields["newKey.keyField"])
+            type("v", into: app.textViews["newKey.valueField"])
             app.buttons["newKey.createButton"].click()
             XCTAssertTrue(app.node("browser.row.\(name)").waitForExistence(timeout: 15))
         }
 
         let search = app.textFields["browser.searchField"]
-        search.click()
-        search.typeText("alpha")
+        type("alpha", into: search)
 
         XCTAssertTrue(app.node("browser.row.alpha:1").waitForExistence(timeout: 15))
         XCTAssertTrue(app.node("browser.row.beta:1").waitForNonExistence(timeout: 15), "search did not filter")
@@ -341,10 +356,8 @@ final class EndToEndUITests: XCTestCase {
 
         app.buttons["browser.newKeyButton"].click()
         XCTAssertTrue(app.node("newKey.view").waitForExistence(timeout: 10))
-        app.textFields["newKey.keyField"].click()
-        app.textFields["newKey.keyField"].typeText("e2e:durable")
-        app.textViews["newKey.valueField"].click()
-        app.textViews["newKey.valueField"].typeText("survives")
+        type("e2e:durable", into: app.textFields["newKey.keyField"])
+        type("survives", into: app.textViews["newKey.valueField"])
         app.buttons["newKey.createButton"].click()
         XCTAssertTrue(app.node("browser.row.e2e:durable").waitForExistence(timeout: 15))
 
@@ -373,8 +386,9 @@ final class EndToEndUITests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: record.path), "no managed server was recorded")
         let pid = try managedServerPID(from: record)
 
-        app.terminate()
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 60))
+        // Quit the way a person does: terminate() can kill the app before it has stopped anything.
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 60), "the app did not quit")
 
         let deadline = Date().addingTimeInterval(30)
         while kill(pid, 0) == 0 && Date() < deadline { usleep(200_000) }
